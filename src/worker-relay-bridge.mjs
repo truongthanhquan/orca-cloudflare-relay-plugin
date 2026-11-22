@@ -9,6 +9,8 @@ const FIRST_FRAME_TIMEOUT_MS = 10_000
 export const MAX_RELAYED_PHONES = 16
 /** Oldest relay Worker contract this bridge speaks (header auth, no presence oracle). */
 export const MIN_RELAY_PROTOCOL = 2
+/** Frames buffered for a socket that is still connecting (the local Orca socket opens in ms). */
+export const MAX_SPLICE_QUEUE_BYTES = 1024 * 1024
 
 /** wss:// URL for a path on the relay Worker (https origin). */
 export function relaySocketUrl(workerUrl, path) {
@@ -63,15 +65,27 @@ function safeClose(ws, code, reason) {
  * closes. Frame types (text/binary) are preserved, so Orca's E2EE frames pass unchanged.
  * `initial` frames are delivered to `b` first (e.g. a hello already read from `a`).
  */
-export function splice(a, b, { onClose = () => {}, initial = [] } = {}) {
+export function splice(a, b, { onClose = () => {}, initial = [], maxQueuedBytes = MAX_SPLICE_QUEUE_BYTES } = {}) {
   let closed = false
-  const queues = new Map([[a, []], [b, [...initial]]])
+  const sizeOf = (frame) => (typeof frame === 'string' ? frame.length : frame?.byteLength ?? 0)
+  const queues = new Map([[a, { frames: [], bytes: 0 }], [b, { frames: [...initial], bytes: initial.reduce((n, f) => n + sizeOf(f), 0) }]])
   const forward = (to) => (event) => {
-    if (to.readyState === 1) to.send(event.data)
-    else if (to.readyState === 0) queues.get(to).push(event.data)
+    if (to.readyState === 1) return to.send(event.data)
+    if (to.readyState !== 0) return
+    const queue = queues.get(to)
+    queue.bytes += sizeOf(event.data)
+    if (queue.bytes > maxQueuedBytes) {
+      // A peer flooding before the other side is even connected is not a real client.
+      safeClose(a, 4009, 'too much data before the connection opened')
+      safeClose(b, 4009, 'too much data before the connection opened')
+      return
+    }
+    queue.frames.push(event.data)
   }
   const flush = (ws) => {
-    for (const frame of queues.get(ws).splice(0)) ws.send(frame)
+    const queue = queues.get(ws)
+    queue.bytes = 0
+    for (const frame of queue.frames.splice(0)) ws.send(frame)
   }
   const close = (other) => (event) => {
     safeClose(other, event?.code ?? 1000, event?.reason)

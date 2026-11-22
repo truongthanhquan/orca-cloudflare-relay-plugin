@@ -210,6 +210,7 @@ async function describe(response) {
  */
 export async function registerRelayHost({ workerUrl, hostId, hostKey, adminToken, fetchImpl = fetch, timeoutMs = 120_000, retryMs = 3000, rolloutMs = 45_000 }) {
   const headers = { 'content-type': 'application/json' }
+  // The Worker's admin secret (plugin deploys) or this desktop's owner token (Deploy button).
   if (adminToken) headers.authorization = `Bearer ${adminToken}`
   const url = `${workerUrl}/v1/hosts/${hostId}/register`
   const deadline = Date.now() + timeoutMs
@@ -230,6 +231,14 @@ export async function registerRelayHost({ workerUrl, hostId, hostKey, adminToken
         if (Date.now() > rolloutDeadline) {
           throw new Error('The relay refused registration (admin token mismatch). Deploy again from this desktop.')
         }
+      }
+      if (response.status === 403 && payload?.error === 'owned_by_another_desktop') {
+        throw new Error(
+          'This relay Worker already belongs to another Orca desktop. Each desktop needs its own Worker: deploy a new one (another name) for this desktop.'
+        )
+      }
+      if (response.status === 401 && payload?.error === 'owner_token_required') {
+        throw new Error('The relay needs an owner token. Update the plugin and try again.')
       }
       if (response.status === 409 && payload?.error === 'host_id_taken') {
         throw new Error('This host id is already registered with a different key.')

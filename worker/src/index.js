@@ -12,21 +12,28 @@
 // Security model
 // · Desktop sockets authenticate with `Authorization: Bearer <hostKey>` (never in the URL);
 //   only a SHA-256 of the key is stored, compared in constant time.
-// · Host ids are 128-bit random capabilities; registering one needs RELAY_ADMIN_TOKEN when set.
-// · Phone connections are rate limited per IP and capped per host, because to Orca every
+// · Host ids are 128-bit random capabilities. Registering one needs RELAY_ADMIN_TOKEN when set;
+//   otherwise (a Deploy-button install) the first desktop to register becomes the Worker's
+//   owner and every later registration must present the same owner token, so nobody else can
+//   use the Worker as a free relay or burn its quota.
+// · Phone connections are rate limited per IP, capped per IP and per host, because to Orca every
 //   relayed phone arrives from loopback and Orca's own per-source limits do not apply.
 // · The desktop bridge additionally refuses anything but an E2EE v2 handshake.
 
 import { DurableObject } from 'cloudflare:workers'
 
-const RELAY_VERSION = '1.1.0'
+const RELAY_VERSION = '1.2.0'
 /** Bumped when the desktop ⇄ relay contract changes; the plugin refuses older relays. */
 const RELAY_PROTOCOL = 2
 const HOST_ID = /^[A-Za-z0-9_-]{16,64}$/
 const CONN_ID = /^[A-Za-z0-9_-]{8,64}$/
 const DATA_WAIT_MS = 15_000
-const MAX_PENDING_BYTES = 4 * 1024 * 1024
+/** Frames a phone may send before the desktop's data socket arrives (just the E2EE hello). */
+const MAX_PENDING_BYTES = 64 * 1024
+const MAX_PENDING_FRAMES = 16
 const MAX_PHONES_PER_HOST = 16
+/** One phone needs one socket; a few more cover reconnects and a second device behind one NAT. */
+const MAX_PHONES_PER_IP = 4
 const PHONE_RATE_WINDOW_MS = 60_000
 const PHONE_RATE_PER_IP = 12
 
@@ -66,6 +73,13 @@ function safeClose(ws, code = 1000, reason = '') {
   }
 }
 
+/** Durable Object name holding the Worker owner (not a valid host id, so never a host). */
+const OWNER_OBJECT = 'worker-owner'
+
+function bearerOf(request) {
+  return (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '')
+}
+
 function connId() {
   const bytes = crypto.getRandomValues(new Uint8Array(12))
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -88,11 +102,18 @@ export default {
 
     // Desktop: /v1/hosts/<hostId>/(register|control|data/<connId>)
     if (parts[1] === 'hosts' && HOST_ID.test(parts[2] ?? '')) {
-      if (parts[3] === 'register' && request.method === 'POST') {
+      if (parts[3] === 'register') {
+        if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
         const admin = env.RELAY_ADMIN_TOKEN
         if (admin) {
-          const given = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '')
-          if (!timingSafeEqual(given, admin)) return json({ error: 'unauthorized' }, 401)
+          if (!timingSafeEqual(bearerOf(request), admin)) return json({ error: 'unauthorized' }, 401)
+        } else {
+          // No admin secret (Deploy button): the first registering desktop claims the Worker.
+          const owner = await env.RELAY.get(env.RELAY.idFromName(OWNER_OBJECT)).fetch('https://owner/claim', {
+            method: 'POST',
+            headers: { authorization: request.headers.get('authorization') ?? '' }
+          })
+          if (!owner.ok) return owner
         }
       }
       return env.RELAY.get(env.RELAY.idFromName(parts[2])).fetch(request)
@@ -116,6 +137,7 @@ export class RelayHost extends DurableObject {
   async fetch(request) {
     const url = new URL(request.url)
     const parts = url.pathname.split('/').filter(Boolean)
+    if (url.hostname === 'owner' && url.pathname === '/claim') return this.claimOwner(request)
     if (parts[1] === 'c') return this.acceptPhone(request)
     if (parts[3] === 'register') return this.register(request)
     const bearer = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '')
@@ -134,8 +156,8 @@ export class RelayHost extends DurableObject {
   /**
    * Binds this host id to the desktop's secret key. With RELAY_ADMIN_TOKEN set (the plugin's
    * own deploy sets it) only the admin may register, and may re-register. Without it (a
-   * Deploy-button install) the first desktop to register claims the id; later attempts must
-   * present the same key.
+   * Deploy-button install) the caller has already proven it holds the Worker's owner token,
+   * and an id, once claimed, can only be re-registered with the same key.
    */
   async register(request) {
     const body = await request.json().catch(() => null)
@@ -147,6 +169,23 @@ export class RelayHost extends DurableObject {
       return json({ error: 'host_id_taken' }, 409)
     }
     await this.ctx.storage.put('keyHash', hash)
+    return json({ ok: true })
+  }
+
+  /**
+   * Runs only in the dedicated owner object. The first owner token presented claims the Worker;
+   * later claims must present the same token. Only its SHA-256 is stored.
+   */
+  async claimOwner(request) {
+    const token = bearerOf(request)
+    if (token.length < 32 || token.length > 256) return json({ error: 'owner_token_required' }, 401)
+    const hash = await sha256(token)
+    const stored = await this.ctx.storage.get('ownerHash')
+    if (!stored) {
+      await this.ctx.storage.put('ownerHash', hash)
+      return json({ ok: true, claimed: true })
+    }
+    if (!timingSafeEqual(stored, hash)) return json({ error: 'owned_by_another_desktop' }, 403)
     return json({ ok: true })
   }
 
@@ -181,13 +220,17 @@ export class RelayHost extends DurableObject {
     if (!isUpgrade(request)) return this.upgradeRequired()
     const ip = request.headers.get('cf-connecting-ip') ?? 'unknown'
     if (this.rateLimited(ip)) return json({ error: 'rate_limited' }, 429)
-    if (this.ctx.getWebSockets('phone').length >= MAX_PHONES_PER_HOST) return json({ error: 'too_many_connections' }, 503)
+    const phones = this.ctx.getWebSockets('phone')
+    if (phones.length >= MAX_PHONES_PER_HOST) return json({ error: 'too_many_connections' }, 503)
+    if (phones.filter((ws) => ws.deserializeAttachment()?.ip === ip).length >= MAX_PHONES_PER_IP) {
+      return json({ error: 'too_many_connections' }, 429)
+    }
     const control = this.ctx.getWebSockets('control')[0]
     if (!control) return json({ error: 'host_offline' }, 503)
     const id = connId()
     const { 0: client, 1: server } = new WebSocketPair()
     this.ctx.acceptWebSocket(server, ['phone', `phone:${id}`])
-    server.serializeAttachment({ role: 'phone', id })
+    server.serializeAttachment({ role: 'phone', id, ip })
     this.pending.set(id, { frames: [], bytes: 0 })
     control.send(JSON.stringify({ t: 'open', id }))
     setTimeout(() => {
@@ -229,7 +272,7 @@ export class RelayHost extends DurableObject {
     if (attachment?.role === 'phone') {
       const queue = this.pending.get(attachment.id)
       const size = typeof message === 'string' ? message.length : message.byteLength
-      if (!queue || queue.bytes + size > MAX_PENDING_BYTES) {
+      if (!queue || queue.bytes + size > MAX_PENDING_BYTES || queue.frames.length >= MAX_PENDING_FRAMES) {
         safeClose(ws, 1013, 'desktop not connected')
         return
       }

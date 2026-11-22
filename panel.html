@@ -334,7 +334,8 @@
         <button class="pair-hide hidden">Hide and invalidate</button>
       </div>
       <div class="qr"></div>
-      <p class="pair-security muted hidden">🔒 Works once, expires in <span class="pair-expiry"></span>. Treat it like a password.</p>
+      <p class="pair-security muted hidden">🔒 Works once and disappears when your phone pairs; expires in <span class="pair-expiry"></span>. Treat it like a password.</p>
+      <p class="pair-done hidden">✅ <strong>Phone paired.</strong> <span class="muted">The code was used and removed. Your phone now connects through Cloudflare from anywhere.</span></p>
       <p class="pair-error error-text"></p>
     </template>
 
@@ -372,11 +373,18 @@
         const ui = {
           clear(reason) {
             clearInterval(timer)
+            show(q('.pair-done'), false)
             q('.qr').innerHTML = ''
             show(q('.pair-security'), false)
             show(q('.pair-hide'), false)
             q('.pair-show').textContent = 'Show pairing QR code'
             q('.pair-error').textContent = reason ? `Code invalidated: ${reason}.` : ''
+          },
+          showing: () => q('.qr').innerHTML !== '',
+          paired() {
+            ui.clear()
+            show(q('.pair-done'), true)
+            q('.pair-show').textContent = 'Pair another phone'
           },
           setEnabled(enabled) { q('.pair-show').disabled = !enabled }
         }
@@ -385,6 +393,7 @@
           const result = await request('pair')
           if (!result.ok) { q('.pair-error').textContent = result.error; return }
           for (const other of pairUis) if (other !== ui) other.clear()
+          show(q('.pair-done'), false)
           q('.qr').innerHTML = result.svg
           show(q('.pair-security'), true)
           show(q('.pair-hide'), true)
@@ -408,6 +417,8 @@
       makePairUi($('w3-pair'))
       makePairUi($('main-pair'))
       orca.plugin.on('pairing-invalidated', (payload) => pairUis.forEach((ui) => ui.clear(payload && payload.reason)))
+      // Only the widget that showed the code says "paired"; the other just drops any stale code.
+      orca.plugin.on('pairing-complete', () => pairUis.forEach((ui) => (ui.showing() ? ui.paired() : ui.clear())))
 
       /* ================= Rendering ================= */
       function render() {

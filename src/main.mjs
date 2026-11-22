@@ -11,11 +11,23 @@ import {
 import { CustomEndpoint, normalizeCustomEndpoint } from './custom-endpoint.mjs'
 import { ensureCloudflared } from './cloudflared-binary.mjs'
 import { readFileSync } from 'node:fs'
-import { createMobilePairingOffer, findOrcaCli, findOrcaWebSocketPort, findOwnPlugin, findOwnPluginKey, openPluginPanel, runPluginUpdate } from './orca-runtime.mjs'
+import {
+  createMobilePairingOffer,
+  findOrcaCli,
+  findOrcaWebSocketPort,
+  findOwnPlugin,
+  findOwnPluginKey,
+  openPluginPanel,
+  pairingDeviceToken,
+  pairingRowFor,
+  readDeviceRegistry,
+  runPluginUpdate
+} from './orca-runtime.mjs'
 import {
   UPDATE_CHECK_INTERVAL_MS,
   UPDATE_POLICIES,
   bundledRelayInfo,
+  compareVersions,
   evaluateRelayUpdate,
   evaluateUpdate,
   fetchUpdateManifest,
@@ -51,6 +63,8 @@ const MANIFEST = (() => {
 const PLUGIN_VERSION = MANIFEST.version
 /** A shown pairing code is invalidated after this long (or when the relay stops). */
 export const PAIRING_CODE_TTL_MS = 5 * 60_000
+/** How often a shown code checks whether a phone has used it. */
+const PAIRING_WATCH_INTERVAL_MS = 1500
 const MODES = ['worker', 'named', 'quick', 'custom']
 const KEYS = {
   enabled: 'tunnel-enabled',
@@ -216,6 +230,9 @@ export default function activate(orca) {
       }
       bridge.start({ workerUrl: relay.workerUrl, hostId: relay.hostId, hostKey, port })
       await orca.storage.set(KEYS.enabled, true)
+      if (relay.deployedBy === 'button' && !relay.ownerClaimed) {
+        claimButtonRelay(relay, hostKey).catch((error) => log(`Could not lock the relay Worker to this desktop: ${errorMessage(error)}`))
+      }
       return
     }
 
@@ -341,6 +358,9 @@ export default function activate(orca) {
     let adminToken = null
     if (usingWorkerUrl) {
       relay = { workerUrl: normalizeWorkerUrl(input.workerUrl), deployedBy: 'button' }
+      // A Deploy-button Worker has no admin secret: this desktop's owner token claims it, so no
+      // one else can register hosts on it.
+      adminToken = (await orca.secrets.get(KEYS.adminToken)) ?? randomSecret()
     } else {
       await saveApiToken(input)
       const request = await cloudflareRequest()
@@ -372,14 +392,35 @@ export default function activate(orca) {
       }
     }
     bridge.setStatus({ state: 'starting', message: `Waiting for ${new URL(relay.workerUrl).host} to come online…` })
-    await waitForRelay(relay.workerUrl)
+    const health = await waitForRelay(relay.workerUrl)
     bridge.setStatus({ state: 'starting', message: 'Registering this desktop with the relay…' })
     await registerRelayHost({ workerUrl: relay.workerUrl, hostId, hostKey, adminToken })
     await orca.secrets.set(KEYS.hostKey, hostKey)
-    await orca.storage.set(KEYS.worker, { ...relay, hostId })
+    if (usingWorkerUrl) await orca.secrets.set(KEYS.adminToken, adminToken)
+    await orca.storage.set(KEYS.worker, { ...relay, hostId, ownerClaimed: usingWorkerUrl ? locksOwner(health) : undefined })
     // Least privilege: the token can edit every Worker in the account and is only needed to
     // deploy, so forget it unless the user asked to keep it (Cloudflare can also revoke it).
     if (!config.keepApiToken) await orca.secrets.delete(KEYS.apiToken)
+  }
+
+  /** Relay 1.2.0+ locks a Deploy-button Worker to the first owner token it sees. */
+  function locksOwner(health) {
+    return health?.service === 'orca-cloudflare-relay' && compareVersions(String(health.version ?? '0'), '1.2.0') >= 0
+  }
+
+  /**
+   * Deploy-button relays set up before relay 1.2.0 accepted registrations from anyone. Once the
+   * Worker is updated, re-registering with an owner token locks it to this desktop.
+   */
+  async function claimButtonRelay(relay, hostKey) {
+    const health = await fetch(`${relay.workerUrl}/health`, { cache: 'no-store' }).then((response) => response.json()).catch(() => null)
+    if (!locksOwner(health)) return
+    const ownerToken = (await orca.secrets.get(KEYS.adminToken)) ?? randomSecret()
+    await registerRelayHost({ workerUrl: relay.workerUrl, hostId: relay.hostId, hostKey, adminToken: ownerToken, timeoutMs: 20_000 })
+    await orca.secrets.set(KEYS.adminToken, ownerToken)
+    const current = await orca.storage.get(KEYS.worker)
+    if (current?.hostId === relay.hostId) await orca.storage.set(KEYS.worker, { ...current, ownerClaimed: true })
+    log('Locked the relay Worker to this desktop.')
   }
 
   async function setupNamed(input) {
@@ -476,24 +517,52 @@ export default function activate(orca) {
       relayFallback: config.relayFallback,
       rotate: true
     })
-    clearTimeout(shownCode?.timer)
+    stopWatchingCode()
     const expiresAt = Date.now() + PAIRING_CODE_TTL_MS
     shownCode = {
       endpoint: status.endpoint,
       timer: setTimeout(() => {
         invalidatePairingCode('the pairing code expired').catch((error) => log(`Could not invalidate the pairing code: ${errorMessage(error)}`))
-      }, PAIRING_CODE_TTL_MS)
+      }, PAIRING_CODE_TTL_MS),
+      watch: null
     }
     shownCode.timer.unref?.()
-    return { ...offer, expiresAt, svg: qrSvg(offer.pairingUrl) }
+    watchForPairing(shownCode, pairingDeviceToken(offer.pairingUrl))
+    // The panel gets the QR image only; the link itself never leaves this process.
+    return { endpoint: offer.endpoint, connectionMode: offer.connectionMode, expiresAt, svg: qrSvg(offer.pairingUrl) }
+  }
+
+  function stopWatchingCode() {
+    clearTimeout(shownCode?.timer)
+    clearInterval(shownCode?.watch)
+  }
+
+  /**
+   * Takes the code off the screen as soon as a phone signs in with it: from then on Orca's
+   * single-use ticket belongs to that phone, and nothing on screen is worth photographing.
+   */
+  function watchForPairing(code, deviceToken) {
+    if (!deviceToken) return
+    let deviceId = null
+    code.watch = setInterval(async () => {
+      const row = pairingRowFor(await readDeviceRegistry(), deviceId ? { deviceId } : { deviceToken })
+      if (shownCode !== code || !row) return
+      deviceId = row.deviceId
+      if (!row.paired) return
+      stopWatchingCode()
+      shownCode = null
+      log('A phone paired through Cloudflare Relay; the pairing code was removed from the screen.')
+      orca.panels.post('pairing-complete', { name: row.name })
+    }, PAIRING_WATCH_INTERVAL_MS)
+    code.watch.unref?.()
   }
 
   /** Replaces the unused code on screen with one nobody has seen, so a photo of it is useless. */
   async function invalidatePairingCode(reason) {
     if (!shownCode) return
-    const { endpoint, timer } = shownCode
+    const { endpoint } = shownCode
+    stopWatchingCode()
     shownCode = null
-    clearTimeout(timer)
     orca.panels.post('pairing-invalidated', { reason })
     const config = await settings()
     const cli = findOrcaCli({ override: config.orcaCliPath || undefined })

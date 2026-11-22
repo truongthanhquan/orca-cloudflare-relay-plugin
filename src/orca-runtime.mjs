@@ -211,3 +211,31 @@ export async function openPluginPanel({ cli, pluginKey, panel }) {
   const { code, stdout, stderr } = await runCli(cli, ['plugin', 'open', pluginKey, '--panel', panel], { timeoutMs: 15_000 })
   if (code !== 0) throw new Error((stderr || stdout || `orca plugin open exited ${code}`).trim().split('\n')[0])
 }
+
+/** The one-time device token inside an `orca://pair?code=…` link (kept in memory only). */
+export function pairingDeviceToken(pairingUrl) {
+  try {
+    const code = new URL(pairingUrl).searchParams.get('code')
+    if (!code) return null
+    const offer = JSON.parse(Buffer.from(code, 'base64url').toString('utf8'))
+    return typeof offer?.deviceToken === 'string' && offer.deviceToken ? offer.deviceToken : null
+  } catch {
+    return null
+  }
+}
+
+/** Orca's paired-device registry rows, or [] when it cannot be read right now. */
+export async function readDeviceRegistry({ userDataDir = orcaUserDataDir() } = {}) {
+  const rows = await readJson(join(userDataDir, 'orca-devices.json'))
+  return Array.isArray(rows) ? rows : []
+}
+
+/**
+ * Finds the registry row behind a pairing code and reports once a phone has signed in with it,
+ * so the code can leave the screen immediately. Returns only non-secret fields.
+ */
+export function pairingRowFor(rows, { deviceToken, deviceId } = {}) {
+  const row = rows.find((item) => (deviceId ? item?.deviceId === deviceId : deviceToken && item?.token === deviceToken))
+  if (!row || typeof row.deviceId !== 'string') return null
+  return { deviceId: row.deviceId, name: typeof row.name === 'string' ? row.name : null, paired: Number(row.lastSeenAt) > 0 }
+}

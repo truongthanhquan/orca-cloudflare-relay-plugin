@@ -237,9 +237,10 @@ protections.
 | Risk | Protection |
 | --- | --- |
 | Replaying recorded traffic (legacy E2EE v1 has no per-session desktop nonce) | The bridge refuses any connection whose first frame is not an **E2EE v2** hello. v2 binds fresh nonces from both sides, so recorded sessions cannot be replayed. This is the rule Orca's own relay enforces (`requireV2`). Orca never sees a refused connection. |
-| A leaked or photographed QR code | Codes are **single use**. Every **Show** makes a new code and cancels the previous one. A shown code is **invalidated after 5 minutes**, on **Hide and invalidate**, or when the relay stops. |
+| A leaked or photographed QR code | Codes are **single use**: Orca swaps the code for the phone's own credential at first sign-in. The code **disappears from the screen the moment your phone pairs**. Every **Show** makes a new code and cancels the previous one. An unused code is **invalidated after 5 minutes**, on **Hide and invalidate**, or when the relay stops. The pairing link itself never leaves the plugin process; the panel only receives the QR image. |
 | Someone else attaching as your desktop | Each desktop has a 128-bit random host id and a 256-bit secret key. The key is sent only in the `Authorization` header over TLS, never in a URL. The Worker stores only a SHA-256 of it and compares in constant time. Registering a host id needs the admin secret the plugin deploys. |
-| Flooding your Orca or your free quota | Orca exempts loopback from its per-source limits, so the relay enforces its own: 12 new phone connections per minute per IP, at most 16 concurrent phones per desktop, and a 10-second first-frame deadline. The bridge opens a local connection to Orca only after a valid v2 hello arrives. |
+| Strangers using your Worker (and its free quota) as their own relay | A plugin-deployed Worker accepts registrations only with its admin secret. A **Deploy-button** Worker has no admin secret, so the first desktop to register **locks it to that desktop's owner token**; anyone else gets "belongs to another Orca desktop". Relays set up before 1.2.0 are locked automatically once the Worker is updated. |
+| Flooding your Orca or your free quota | Orca exempts loopback from its per-source limits, so the relay enforces its own: 12 new phone connections per minute per IP, at most 4 concurrent connections per IP and 16 per desktop, and a 10-second first-frame deadline (Orca then gives a connection 10 seconds to authenticate). At most 64 KiB may be buffered before the desktop answers, and 1 MiB while the local connection opens. The bridge opens a local connection to Orca only after a valid v2 hello arrives. |
 | Probing whether you are online | The phone URL answers nothing without a WebSocket upgrade. |
 | A stolen Cloudflare API token | The token is needed only to deploy, so it is **deleted after deploy** by default. The setting is "Keep the Cloudflare API token". You can also revoke it in Cloudflare right away. Removing setup without a token still forgets this desktop's relay key. |
 | Secrets on disk | All tokens and keys live in Orca's plugin secret store (OS keychain). None are in settings, logs or process arguments. |
@@ -251,6 +252,12 @@ protections.
   directly, so the bridge's v2 check does not apply. Orca Mobile still latches every desktop to v2
   after its first v2 connection and refuses to downgrade. Use the Worker relay for the full set of
   protections.
+- **Someone with many IP addresses can still slow pairing down:** limits are per IP. Even when
+  they hold every slot, they cannot get in: every connection must still pass Orca's E2EE and
+  token checks. If it happens, rotate the address by removing and redoing setup. Your phones
+  will need to pair again.
+- **Revoke a lost phone in Orca:** use **Paired devices** on Orca's Mobile page. A paired phone holds its
+  own long-term credential, and removing the device there cuts it off immediately, relay or not.
 - **Pairing widens Orca's listener:** like Orca's own network pairing, creating an offer makes
   Orca's mobile server listen on all interfaces (LAN), not only loopback.
 
