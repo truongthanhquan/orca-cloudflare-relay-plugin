@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "plugin": {
-    "latest": "2.5.1",
+    "latest": "2.6.0",
     "minimum": "2.1.0",
-    "notes": "2.5.1 fixes \"value: Invalid input\" after deploying the relay with a Cloudflare token (2.5.0). Also in 2.5.x: pairing codes vanish as soon as a phone pairs, Deploy-button relays are locked to your desktop, tighter relay limits."
+    "notes": "2.6.0 follows Orca's plugin guide: the plugin no longer updates itself. Update it from Orca (Settings → Plugins → Update); listed copies update automatically. Also checks for an OS key store before setup."
   },
   "relay": {
     "latest": "1.2.0",

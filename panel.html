@@ -129,16 +129,10 @@
     <h1>Cloudflare Relay</h1>
     <p class="muted" id="tagline">Connect Orca Mobile to this computer from anywhere, through Cloudflare.</p>
 
-    <!-- Updates (only when something is available or failed) -->
+    <!-- Relay Worker updates (only when one is available). Plugin updates are Orca's: Settings → Plugins. -->
     <div class="card hidden" id="updates-card">
-      <h2 id="updates-title">Update available</h2>
-      <div id="plugin-update" class="hidden">
-        <p><b>Plugin</b> <span id="plugin-update-versions" class="mono"></span> <span id="plugin-required" class="badge error hidden"><span class="dot"></span>Required</span></p>
-        <p id="plugin-update-notes" class="muted"></p>
-        <div class="row"><button id="update-plugin" class="primary">Update plugin</button></div>
-        <p id="plugin-update-message" class="muted" style="margin-top:6px"></p>
-      </div>
-      <div id="relay-update" class="hidden" style="margin-top:10px">
+      <h2 id="updates-title">Relay update available</h2>
+      <div id="relay-update" class="hidden">
         <p><b>Relay Worker</b> <span id="relay-update-versions" class="mono"></span> <span id="relay-required" class="badge error hidden"><span class="dot"></span>Required</span></p>
         <p id="relay-update-notes" class="muted"></p>
         <div id="relay-token" class="hidden">
@@ -319,7 +313,7 @@
         <button class="link" id="change-setup">Change setup</button>
       </div>
       <p class="muted" id="summary-detail" style="margin:4px 0 6px"></p>
-      <p class="muted" style="margin:0">Version <span id="version"></span> · <span id="update-check-text">Checking for updates…</span> <button class="link" id="check-updates">Check now</button></p>
+      <p class="muted" style="margin:0">Version <span id="version"></span> · <span id="update-check-text">Checking the relay…</span> <button class="link" id="check-updates">Check now</button></p>
       <div class="row" style="margin-top:8px"><button id="remove" class="danger">Remove setup</button></div>
       <p id="summary-error" class="error-text" style="margin-top:6px"></p>
     </div>
@@ -665,21 +659,10 @@
       function renderUpdates(u) {
         if (!u) return
         snap.updates = u
-        const plugin = u.plugin && u.plugin.available ? u.plugin : null
         const relay = u.relay && u.relay.available ? u.relay : null
-        show($('updates-card'), Boolean(plugin || relay))
-        $('updates-card').classList.toggle('attention', Boolean((plugin && plugin.blocking) || (relay && relay.mandatory)))
-        $('updates-title').textContent = (plugin && plugin.mandatory) || (relay && relay.mandatory) ? 'Required update' : 'Update available'
-        show($('plugin-update'), Boolean(plugin))
-        if (plugin) {
-          $('plugin-update-versions').textContent = `${plugin.current} → ${plugin.latest}`
-          show($('plugin-required'), plugin.mandatory)
-          $('plugin-update-notes').textContent = plugin.notes || ''
-          $('update-plugin').disabled = plugin.status === 'installing' || plugin.status === 'updated' || plugin.isDev
-          $('plugin-update-message').textContent = plugin.isDev
-            ? 'Development copy: update it by pulling the repository.'
-            : plugin.message || (plugin.blocking ? 'The relay stays off until this required update is installed.' : '')
-        }
+        show($('updates-card'), Boolean(relay))
+        $('updates-card').classList.toggle('attention', Boolean(relay && relay.mandatory))
+        $('updates-title').textContent = relay && relay.mandatory ? 'Relay update required' : 'Relay update available'
         show($('relay-update'), Boolean(relay))
         if (relay) {
           const viaButton = relay.deployedBy === 'button'
@@ -695,18 +678,13 @@
         }
         $('update-check-text').textContent = u.error
           ? u.error
-          : u.checkedAt ? `checked ${new Date(u.checkedAt).toLocaleTimeString()}${plugin || relay ? '' : ', up to date'}` : 'Checking for updates…'
+          : u.checkedAt ? `relay checked ${new Date(u.checkedAt).toLocaleTimeString()}${relay ? '' : ', up to date'}` : 'Checking the relay…'
       }
       $('check-updates').addEventListener('click', () => withButton($('check-updates'), async () => {
         $('update-check-text').textContent = 'Checking…'
         const result = await request('check-updates')
         if (result.ok) renderUpdates(result)
         else $('update-check-text').textContent = result.error
-      }))
-      $('update-plugin').addEventListener('click', () => withButton($('update-plugin'), async () => {
-        const result = await request('update-plugin', undefined, 120000)
-        if (result.updates) renderUpdates(result.updates)
-        if (!result.ok) $('plugin-update-message').textContent = result.error
       }))
       $('update-relay').addEventListener('click', () => withButton($('update-relay'), async () => {
         const result = await request('update-relay', { apiToken: $('relay-api-token').value.trim() }, 120000)

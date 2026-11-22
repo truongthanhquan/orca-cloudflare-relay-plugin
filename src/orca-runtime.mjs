@@ -178,34 +178,6 @@ export function pickOwnPluginKey(result, options) {
   return pickOwnPlugin(result, options)?.pluginKey ?? null
 }
 
-/** This plugin's entry in `orca plugin list` (key, isDev, source, version). */
-export async function findOwnPlugin({ cli, pluginId = 'cloudflare-relay', version } = {}) {
-  const { stdout } = await runCli(cli, ['plugin', 'list', '--json'], { timeoutMs: 15_000 })
-  return pickOwnPlugin(parseCliJson(stdout), { pluginId, version })
-}
-
-/**
- * Runs Orca's own updater for this plugin. An update that asks for more access is refused by
- * Orca (approval_required) and must be approved by the person — never by the plugin itself.
- */
-export async function runPluginUpdate({ cli, pluginKey }) {
-  const { code, stdout, stderr } = await runCli(cli, ['plugin', 'update', pluginKey, '--json'], { timeoutMs: 180_000 })
-  let payload = null
-  try {
-    payload = JSON.parse(stdout.slice(stdout.indexOf('{')))
-  } catch {
-    // Non-JSON failure output.
-  }
-  const result = payload?.result ?? payload
-  if (code === 3 || payload?.error?.code === 'approval_required' || payload?.error?.code === 'approval_stale') {
-    return { status: 'approval_required', message: payload?.error?.message ?? 'This update asks for new access and needs your approval.' }
-  }
-  if (code !== 0 || payload?.ok === false) {
-    throw new Error(payload?.error?.message ?? (stderr || stdout || `orca plugin update exited ${code}`).trim().split('\n')[0])
-  }
-  return { status: result?.status ?? 'updated', version: result?.version ?? null, message: result?.reason ?? null }
-}
-
 /** Shows one of this plugin's panels in Orca's right sidebar (there is no host API for it). */
 export async function openPluginPanel({ cli, pluginKey, panel }) {
   const { code, stdout, stderr } = await runCli(cli, ['plugin', 'open', pluginKey, '--panel', panel], { timeoutMs: 15_000 })

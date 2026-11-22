@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-/** How often a running plugin looks for new versions. */
+/** How often a running plugin compares the deployed relay Worker with the bundled one. */
 export const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60_000
 export const UPDATE_POLICIES = ['all', 'mandatory', 'off']
 
@@ -13,53 +13,6 @@ export function compareVersions(a, b) {
     if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0) ? 1 : -1
   }
   return 0
-}
-
-function isVersion(value) {
-  return typeof value === 'string' && /^v?\d+\.\d+\.\d+/.test(value)
-}
-
-/** raw.githubusercontent.com URL of `update-manifest.json` for a GitHub repository URL. */
-export function updateManifestUrl(repository, branch = 'main') {
-  const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(String(repository ?? ''))
-  if (!match) return null
-  return `https://raw.githubusercontent.com/${match[1]}/${match[2]}/${branch}/update-manifest.json`
-}
-
-/**
- * The published update manifest:
- * { schema: 1, plugin: { latest, minimum, notes }, relay: { latest, minimum, notes } }.
- * `minimum` marks a required update: anything older must update (security or breaking fix).
- */
-export function parseUpdateManifest(value) {
-  if (value?.schema !== 1 || !isVersion(value?.plugin?.latest)) throw new Error('Unrecognised update manifest.')
-  const section = (raw) =>
-    raw && isVersion(raw.latest)
-      ? {
-          latest: raw.latest.replace(/^v/, ''),
-          minimum: isVersion(raw.minimum) ? raw.minimum.replace(/^v/, '') : null,
-          notes: typeof raw.notes === 'string' ? raw.notes.slice(0, 2000) : ''
-        }
-      : null
-  return { plugin: section(value.plugin), relay: section(value.relay) }
-}
-
-export async function fetchUpdateManifest(url, { fetchImpl = fetch, timeoutMs = 15_000 } = {}) {
-  const response = await fetchImpl(`${url}?t=${Date.now()}`, {
-    cache: 'no-store',
-    signal: AbortSignal.timeout(timeoutMs)
-  })
-  if (response.status === 404) throw new Error('no update information is published yet')
-  if (!response.ok) throw new Error(`update server answered HTTP ${response.status}`)
-  return parseUpdateManifest(await response.json())
-}
-
-/** What an installed version should do given the published section. */
-export function evaluateUpdate(current, section) {
-  if (!section || !isVersion(current)) return { available: false, mandatory: false, latest: section?.latest ?? null, notes: '' }
-  const available = compareVersions(section.latest, current) > 0
-  const mandatory = Boolean(section.minimum) && compareVersions(current, section.minimum) < 0
-  return { available: available || mandatory, mandatory, latest: section.latest, minimum: section.minimum, notes: section.notes }
 }
 
 /** Whether a policy installs this update without asking. */
@@ -80,19 +33,11 @@ export function bundledRelayInfo(sourcePath = fileURLToPath(new URL('../worker/s
 
 /**
  * The deployed relay compared with the bundled one. Required when its protocol is older than
- * the bridge speaks, or the published manifest marks its version as below the minimum.
+ * the bridge speaks.
  */
-export function evaluateRelayUpdate({ deployed, bundled, minProtocol, published }) {
+export function evaluateRelayUpdate({ deployed, bundled, minProtocol }) {
   if (!deployed?.version || !bundled?.version) return { available: false, mandatory: false, deployed: deployed?.version ?? null, latest: bundled?.version ?? null }
   const protocolTooOld = !(deployed.protocol >= minProtocol)
-  const belowMinimum = Boolean(published?.minimum) && compareVersions(deployed.version, published.minimum) < 0
   const newer = compareVersions(bundled.version, deployed.version) > 0
-  // The plugin can only deploy the Worker it ships; a newer published one needs a plugin update first.
-  return {
-    available: newer || protocolTooOld,
-    mandatory: protocolTooOld || (belowMinimum && newer),
-    deployed: deployed.version,
-    latest: bundled.version,
-    notes: published && compareVersions(published.latest, deployed.version) > 0 ? published.notes : ''
-  }
+  return { available: newer || protocolTooOld, mandatory: protocolTooOld, deployed: deployed.version, latest: bundled.version }
 }

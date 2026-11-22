@@ -15,25 +15,13 @@ import {
   createMobilePairingOffer,
   findOrcaCli,
   findOrcaWebSocketPort,
-  findOwnPlugin,
   findOwnPluginKey,
   openPluginPanel,
   pairingDeviceToken,
   pairingRowFor,
-  readDeviceRegistry,
-  runPluginUpdate
+  readDeviceRegistry
 } from './orca-runtime.mjs'
-import {
-  UPDATE_CHECK_INTERVAL_MS,
-  UPDATE_POLICIES,
-  bundledRelayInfo,
-  compareVersions,
-  evaluateRelayUpdate,
-  evaluateUpdate,
-  fetchUpdateManifest,
-  shouldAutoInstall,
-  updateManifestUrl
-} from './updates.mjs'
+import { UPDATE_CHECK_INTERVAL_MS, UPDATE_POLICIES, bundledRelayInfo, compareVersions, evaluateRelayUpdate, shouldAutoInstall } from './updates.mjs'
 import { pluginCacheDir } from './paths.mjs'
 import { qrSvg } from './qr.mjs'
 import { TunnelProcess } from './tunnel-process.mjs'
@@ -91,9 +79,6 @@ const KEYS = {
 /** An error the user fixes in the panel's setup section (the panel opens it for them). */
 class SetupRequired extends Error {}
 
-/** A required (mandatory) plugin update is pending; the relay stays off until it is installed. */
-class UpdateRequired extends Error {}
-
 let tunnel = null
 let bridge = null
 let custom = null
@@ -103,6 +88,12 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error)
 }
 
+/**
+ * Plugin updates are Orca's job (Settings → Plugins, and automatic catalog updates), so this
+ * worker never updates itself. It only offers to redeploy the relay Worker in the user's own
+ * Cloudflare account when the bundled Worker is newer than the deployed one.
+ * @param {import('orca/worker').OrcaWorkerApi} orca
+ */
 export default function activate(orca) {
   const cacheDir = pluginCacheDir()
   const log = (message) => orca.log(message)
@@ -134,7 +125,6 @@ export default function activate(orca) {
       localPort: Number(all.localPort) || 0,
       cloudflaredPath: typeof all.cloudflaredPath === 'string' ? all.cloudflaredPath.trim() : '',
       orcaCliPath: typeof all.orcaCliPath === 'string' ? all.orcaCliPath.trim() : '',
-      pluginUpdates: UPDATE_POLICIES.includes(all.pluginUpdates) ? all.pluginUpdates : 'mandatory',
       relayUpdates: UPDATE_POLICIES.includes(all.relayUpdates) ? all.relayUpdates : 'mandatory'
     }
   }
@@ -163,45 +153,39 @@ export default function activate(orca) {
     return isConfigured
   }
 
-  /** Latest update check: { checkedAt, error, plugin: {...}, relay: {...} }. */
-  const updates = { checkedAt: null, error: null, plugin: null, relay: null, own: null }
-
-  /** Only an installed copy is held back by a required update; a development folder never is. */
-  function pluginUpdateBlocks() {
-    return Boolean(updates.plugin?.mandatory && updates.own && !updates.own.isDev && updates.plugin.status !== 'updated')
-  }
+  /** Latest relay Worker check: { checkedAt, error, relay: {...} }. */
+  const updates = { checkedAt: null, error: null, relay: null }
 
   function renderStatusBar(status) {
     const label = status.mode === 'worker' ? 'Cloudflare relay' : status.mode === 'custom' ? 'Your own address' : 'Cloudflare tunnel'
     const view = {
-      stopped: { text: 'Cloudflare: off', tone: 'neutral', icon: 'cloud', tooltip: `${label} is off. Click to start.` },
-      starting: { text: 'Cloudflare: connecting', tone: 'accent', icon: 'cloud', tooltip: status.message ?? 'Connecting…' },
+      stopped: { text: 'Relay off', tone: 'neutral', icon: 'cloud', tooltip: `${label} is off. Click to start.` },
+      starting: { text: 'Relay…', tone: 'accent', icon: 'cloud', tooltip: status.message ?? 'Connecting…' },
       connected: {
-        text: status.phones ? `Cloudflare: on · ${status.phones}` : 'Cloudflare: on',
+        text: status.phones ? `Relay · ${status.phones} ${status.phones === 1 ? 'phone' : 'phones'}` : 'Relay on',
         tone: 'success',
         icon: 'cloud',
-        tooltip: `Orca Mobile can reach this desktop through ${status.endpoint}. Click to stop.`
+        tooltip: `Cloudflare relay is on: Orca Mobile can reach this desktop through ${status.endpoint}. Click to stop.`
       },
-      error: { text: 'Cloudflare: error', tone: 'danger', icon: 'warning', tooltip: `${status.message ?? `${label} failed.`} Click to open Cloudflare Relay.` }
+      error: { text: 'Relay error', tone: 'danger', icon: 'warning', tooltip: `${status.message ?? `${label} failed.`} Click to open Cloudflare Relay.` }
     }[status.state]
     if (status.state !== 'error') view.tooltip = `${view.tooltip.replace(/ Click to (start|stop)\.$/, '')} Click to open Cloudflare Relay.`
     if (!isConfigured && status.state === 'stopped') {
       Object.assign(view, {
-        text: 'Cloudflare: set up',
+        text: 'Set up relay',
         tone: 'accent',
         icon: 'cloud',
         tooltip: 'Cloudflare Relay is not set up yet. Click to connect Orca Mobile through your free Cloudflare account (about 2 minutes).'
       })
     }
-    const required = pluginUpdateBlocks() || updates.relay?.mandatory
-    if (required && status.state !== 'error') {
-      view.text = 'Cloudflare: update required'
+    if (updates.relay?.mandatory && status.state !== 'error') {
+      view.text = 'Update relay'
       view.tone = 'warning'
       view.icon = 'warning'
-      view.tooltip = `A required update is waiting. ${view.tooltip}`
-    } else if (updates.plugin?.available || updates.relay?.available) {
+      view.tooltip = `The relay Worker must be redeployed. ${view.tooltip}`
+    } else if (updates.relay?.available) {
       view.text = `${view.text} ↑`
-      view.tooltip = `An update is available. ${view.tooltip}`
+      view.tooltip = `A relay Worker update is available. ${view.tooltip}`
     }
     orca.host.call('statusBar.update', { id: STATUS_ITEM, ...view }).catch(() => {})
   }
@@ -227,11 +211,6 @@ export default function activate(orca) {
   }
 
   async function startTunnel() {
-    if (pluginUpdateBlocks()) {
-      throw new UpdateRequired(
-        `Cloudflare Relay ${updates.plugin.latest} is a required update (this is ${PLUGIN_VERSION}). Install it from the panel to reconnect.`
-      )
-    }
     const config = await settings()
     const { port } = await findOrcaWebSocketPort({ override: config.localPort })
 
@@ -464,10 +443,26 @@ export default function activate(orca) {
     await orca.settings.set('hostname', hostname)
   }
 
+  /**
+   * The relay and tunnel keys live in Orca's encrypted secrets file, which needs an OS key store.
+   * Without one (`secrets.protection` is `unavailable`, such as Linux `basic_text`) `secrets.set`
+   * fails, so say why up front instead of failing halfway through a deploy.
+   */
+  async function requireSecretStore() {
+    if (!orca.host.has?.('secrets.protection')) return
+    const protection = await orca.host.call('secrets.protection', {}).catch(() => null)
+    if (protection?.status === 'unavailable') {
+      throw new Error(
+        'Orca cannot store secrets on this computer because no OS key store is available (on Linux, install and unlock a keyring such as GNOME Keyring or KWallet, then restart Orca). The relay keys must be stored encrypted, so setup stopped.'
+      )
+    }
+  }
+
   async function setup(input) {
     const mode = MODES.includes(input?.mode) ? input.mode : 'worker'
     await orca.settings.set('mode', mode)
     if (typeof input?.relayFallback === 'boolean') await orca.settings.set('relayFallback', input.relayFallback)
+    if (mode === 'worker' || mode === 'named') await requireSecretStore()
     if (mode === 'worker') await setupWorker(input)
     if (mode === 'named') await setupNamed(input)
     if (mode === 'custom') {
@@ -602,22 +597,12 @@ export default function activate(orca) {
   // ---------------------------------------------------------------- updates
 
   function updatesView() {
-    return {
-      checkedAt: updates.checkedAt,
-      error: updates.error,
-      plugin: updates.plugin && { ...updates.plugin, current: PLUGIN_VERSION, isDev: Boolean(updates.own?.isDev), blocking: pluginUpdateBlocks() },
-      relay: updates.relay
-    }
+    return { checkedAt: updates.checkedAt, error: updates.error, relay: updates.relay }
   }
 
   function publishUpdates() {
     orca.panels.post('updates', updatesView())
     renderStatusBar(currentStatus())
-  }
-
-  async function ownPlugin(cli) {
-    if (!updates.own) updates.own = await findOwnPlugin({ cli, pluginId: MANIFEST.id, version: PLUGIN_VERSION })
-    return updates.own
   }
 
   /** Version of the deployed relay Worker, from its public health endpoint. */
@@ -627,32 +612,18 @@ export default function activate(orca) {
     return payload?.service === 'orca-cloudflare-relay' ? { version: payload.version, protocol: payload.protocol ?? 1 } : null
   }
 
+  /** Compares the deployed relay Worker with the one bundled in this plugin (no other network calls). */
   async function checkForUpdates({ apply = true } = {}) {
     const config = await settings()
-    let manifest = null
-    try {
-      const url = updateManifestUrl(MANIFEST.repository)
-      if (!url) throw new Error('the plugin manifest names no GitHub repository')
-      manifest = await fetchUpdateManifest(url)
-      updates.error = null
-    } catch (error) {
-      updates.error = `Could not check for updates: ${errorMessage(error)}`
-    }
-    const previous = updates.plugin
-    if (manifest?.plugin) {
-      const evaluated = evaluateUpdate(PLUGIN_VERSION, manifest.plugin)
-      // Keep the outcome of an install attempt for the same target version.
-      const keep = previous?.latest === evaluated.latest ? { status: previous.status, message: previous.message } : { status: 'idle', message: null }
-      updates.plugin = { ...evaluated, ...keep }
-    }
-    const cli = findOrcaCli({ override: config.orcaCliPath || undefined })
-    if (cli) await ownPlugin(cli).catch(() => null)
-
     const relay = config.mode === 'worker' ? await orca.storage.get(KEYS.worker) : null
+    updates.error = null
     if (relay?.workerUrl) {
-      const deployed = await relayHealth(relay.workerUrl).catch(() => null)
+      const deployed = await relayHealth(relay.workerUrl).catch((error) => {
+        updates.error = `Could not reach the relay Worker: ${errorMessage(error)}`
+        return null
+      })
       if (deployed) {
-        const evaluated = evaluateRelayUpdate({ deployed, bundled: bundledRelayInfo(), minProtocol: MIN_RELAY_PROTOCOL, published: manifest?.relay })
+        const evaluated = evaluateRelayUpdate({ deployed, bundled: bundledRelayInfo(), minProtocol: MIN_RELAY_PROTOCOL })
         const keep = updates.relay?.latest === evaluated.latest && updates.relay?.deployed === evaluated.deployed
           ? { status: updates.relay.status, message: updates.relay.message }
           : { status: 'idle', message: null }
@@ -668,47 +639,10 @@ export default function activate(orca) {
   }
 
   async function applyUpdatePolicies(config) {
-    const plugin = updates.plugin
-    if (plugin && !updates.own?.isDev && plugin.status === 'idle' && shouldAutoInstall(config.pluginUpdates, plugin)) {
-      await installPluginUpdate().catch((error) => log(`Automatic plugin update failed: ${errorMessage(error)}`))
-    }
-    if (pluginUpdateBlocks() && active.wanted) {
-      // Required means required: keep phones off an outdated relay path until it is installed.
-      active.stop({ silent: true })
-      fail(new UpdateRequired(`Cloudflare Relay ${plugin.latest} is a required update${plugin.notes ? `: ${plugin.notes}` : '.'} Install it from the panel to reconnect.`))
-    }
     const relay = updates.relay
     if (relay && relay.status === 'idle' && relay.deployedBy === 'plugin' && shouldAutoInstall(config.relayUpdates, relay) && (await orca.secrets.get(KEYS.apiToken))) {
       await updateRelay().catch((error) => log(`Automatic relay update failed: ${errorMessage(error)}`))
     }
-  }
-
-  async function installPluginUpdate() {
-    if (updates.own?.isDev) throw new Error('This is a development copy; update it by pulling the repository.')
-    const config = await settings()
-    const cli = findOrcaCli({ override: config.orcaCliPath || undefined })
-    if (!cli) throw new Error('The Orca CLI was not found, so the plugin cannot update itself. Run `orca plugin update` from Orca.')
-    const own = await ownPlugin(cli)
-    if (!own?.pluginKey) throw new Error('This plugin was not found in `orca plugin list`.')
-    updates.plugin = { ...updates.plugin, status: 'installing', message: 'Installing the update…' }
-    publishUpdates()
-    try {
-      const outcome = await runPluginUpdate({ cli, pluginKey: own.pluginKey })
-      if (outcome.status === 'approval_required') {
-        updates.plugin = { ...updates.plugin, status: 'approval_required', message: `${outcome.message} Approve it in Orca Settings → Plugins, or run: orca plugin update ${own.pluginKey}` }
-      } else if (outcome.status === 'updated') {
-        // Orca restarts this worker with the new version right after this.
-        updates.plugin = { ...updates.plugin, status: 'updated', message: `Updated to ${outcome.version ?? updates.plugin.latest}. Restarting…` }
-      } else {
-        updates.plugin = { ...updates.plugin, status: 'failed', message: outcome.message ?? `Orca reported "${outcome.status}"; the new version is not published to the repository yet.` }
-      }
-    } catch (error) {
-      updates.plugin = { ...updates.plugin, status: 'failed', message: errorMessage(error) }
-      throw error
-    } finally {
-      publishUpdates()
-    }
-    return updates.plugin
   }
 
   /** Redeploys the bundled relay Worker; same host id and keys, so phones stay paired. */
@@ -773,10 +707,6 @@ export default function activate(orca) {
   })
   handle('pair', pairingOffer)
   handle('check-updates', () => checkForUpdates())
-  handle('update-plugin', async () => {
-    await installPluginUpdate()
-    return { updates: updatesView() }
-  })
   handle('update-relay', async (input) => ({ updates: await updateRelay(input) }))
   handle('verify-token', async (input) => {
     const candidate = typeof input?.apiToken === 'string' && input.apiToken.trim()
@@ -852,7 +782,7 @@ export default function activate(orca) {
       : `Cloudflare Relay is ${status.state}${status.message ? `: ${status.message}` : ''}`
   })
 
-  // Look for updates shortly after start, then periodically (the worker stays resident).
+  // Check the relay Worker shortly after start, then periodically (the worker stays resident).
   const runCheck = () => checkForUpdates().catch((error) => log(`Update check failed: ${errorMessage(error)}`))
   updateTimers.push(setTimeout(runCheck, 15_000), setInterval(runCheck, UPDATE_CHECK_INTERVAL_MS))
 
@@ -863,7 +793,7 @@ export default function activate(orca) {
       await startInBackground()
       // A host call can fail transiently while Orca is still settling a (re)loaded plugin's
       // consent; retry once rather than leaving the relay in an error state.
-      if (active.status.state === 'error' && !active.status.needsSetup && !pluginUpdateBlocks()) {
+      if (active.status.state === 'error' && !active.status.needsSetup) {
         await new Promise((resolve) => updateTimers.push(setTimeout(resolve, 5000)))
         await startInBackground()
       }

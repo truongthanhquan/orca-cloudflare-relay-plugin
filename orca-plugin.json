@@ -4,8 +4,8 @@
   "execution": "trusted-worker",
   "id": "cloudflare-relay",
   "name": "Cloudflare Relay",
-  "version": "2.5.1",
-  "description": "Connect Orca Mobile to this desktop from anywhere through your free Cloudflare account. After installing, click \"Cloudflare: set up\" in the status bar (or run \"Set up / open panel\") and follow 3 steps. Phones pair with a normal QR code; no app changes needed. Not affiliated with Cloudflare.",
+  "version": "2.6.0",
+  "description": "Connect Orca Mobile to this desktop from anywhere through your free Cloudflare account. After installing, click \"Set up relay\" (cloud icon) in the status bar (or run \"Set up / open panel\") and follow 3 steps. Phones pair with a normal QR code; no app changes needed. Not affiliated with Cloudflare.",
   "author": {
     "name": "truongthanhquan",
     "url": "https://github.com/truongthanhquan"
@@ -52,7 +52,7 @@
     "statusBarItems": [
       {
         "id": "tunnel",
-        "text": "Cloudflare: off",
+        "text": "Relay off",
         "icon": "cloud",
         "tooltip": "Cloudflare Relay for Orca Mobile. Click to open.",
         "command": "cloudflare-relay.openPanel"
@@ -62,7 +62,7 @@
       {
         "key": "mode",
         "title": "Connection type (set up in the Cloudflare Relay panel)",
-        "description": "Start here: open the Cloudflare Relay panel (click \"Cloudflare: set up\" in the status bar, the cloud icon in the right sidebar, or run \"Cloudflare Relay: Set up / open panel\" on this page). The panel walks you through it in about 2 minutes: choose a type, connect Cloudflare, scan a QR code. Changing this setting alone does not set anything up. Worker relay: free account, stable workers.dev address (recommended). Tunnel on your domain: free account plus a domain. Quick tunnel: no account, but the address changes on every restart. Your own address: you run the tunnel or proxy yourself and the plugin only pairs phones with it.",
+        "description": "Start here: open the Cloudflare Relay panel (click \"Set up relay\" in the status bar, the cloud icon in the right sidebar, or run \"Cloudflare Relay: Set up / open panel\" on this page). The panel walks you through it in about 2 minutes: choose a type, connect Cloudflare, scan a QR code. Changing this setting alone does not set anything up. Worker relay: free account, stable workers.dev address (recommended). Tunnel on your domain: free account plus a domain. Quick tunnel: no account, but the address changes on every restart. Your own address: you run the tunnel or proxy yourself and the plugin only pairs phones with it.",
         "type": "string",
         "enum": [
           "worker",
@@ -91,23 +91,6 @@
         "description": "Put Orca Relay into the pairing QR code too, as a fallback when Cloudflare is unreachable. Needs this Orca signed in to Orca.",
         "type": "boolean",
         "default": false
-      },
-      {
-        "key": "pluginUpdates",
-        "title": "Plugin updates",
-        "description": "How new versions of this plugin are installed (checked every 6 hours). A required update fixes a security or compatibility problem: until it is installed, the relay stays off.",
-        "type": "string",
-        "enum": [
-          "all",
-          "mandatory",
-          "off"
-        ],
-        "enumLabels": [
-          "Install all updates automatically",
-          "Install required updates automatically, ask for others",
-          "Ask before every update"
-        ],
-        "default": "mandatory"
       },
       {
         "key": "relayUpdates",

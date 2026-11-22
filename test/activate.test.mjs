@@ -61,7 +61,7 @@ test('a fresh install starts in onboarding: not configured, status bar invites s
   try {
     const snapshot = await orca.handlers.get('status')()
     assert.equal(snapshot.configured, false)
-    assert.equal(bar.at(-1).text, 'Cloudflare: set up')
+    assert.equal(bar.at(-1).text, 'Set up relay')
     assert.match(bar.at(-1).tooltip, /not set up yet/)
   } finally {
     deactivate()

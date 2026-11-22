@@ -103,7 +103,7 @@ exactly as it scans a LAN code. The app needs no update and no settings change.
 1. Install the plugin: `orca plugin install https://github.com/truongthanhquan/orca-cloudflare-relay-plugin`.
    For development, use `orca plugin dev load .`.
 2. The **Cloudflare Relay** panel opens by itself the first time. Later, open it with
-   `Cloudflare: set up` in the status bar, the cloud icon in the right sidebar, or
+   `Set up relay` (cloud icon) in the status bar, the cloud icon in the right sidebar, or
    **Cloudflare Relay: Set up / open panel**, which you can also run from the plugin's page in
    Orca.
 3. Follow the three setup steps. They are shown together, and the one you're on is
@@ -135,7 +135,7 @@ labeled **Advanced:**.
   does not recognise this desktop". The setup card is highlighted, opens by itself, and a
   **Fix in setup** button jumps to it.
 
-**Status bar:** `Cloudflare: off | connecting | on · <phones> | error`. Clicking it always opens
+**Status bar** (cloud icon): `Relay off | Relay… | Relay on | Relay · <n> phones | Relay error`. Clicking it always opens
 the panel. It does not toggle the relay, so a stray click can't disconnect your phones. The
 tooltip on an error carries the reason. `Cloudflare Relay: Toggle`, `Start` and `Stop` are still
 in the command palette.
@@ -175,48 +175,42 @@ changes, the status tells you which service address to update in Cloudflare.
 
 ## Updates
 
-The plugin checks for updates 15 seconds after Orca starts, then every 6 hours, or when you click
-**Check now** in the panel.
+**Plugin updates are Orca's job**, as Orca's [plugin guide](https://github.com/stablyai/orca/blob/main/docs/reference/plugin-authoring.md#5-publish-to-a-catalog)
+describes. The plugin never updates itself.
+- **Installed from the directory or a catalog:** Orca installs new versions by itself while
+  **Update plugins automatically** is on (the default). A release installs once it has been
+  listed for 12 hours, so a takedown has time to land.
+- **Installed from a Git URL:** click **Update** on the plugin in Orca's Settings → Plugins, or
+  run `orca plugin update truongthanhquan.cloudflare-relay`.
+- **Approval:** an update that asks for no new access keeps its approval. One that asks for more
+  shows **Update needs review** in Orca until you approve it.
+- Versions before 2.6.0 updated themselves from `update-manifest.json`. The file stays in the
+  repository only so those copies can find 2.6.0.
 
-**Plugin updates:**
-- **Where versions come from:** `update-manifest.json` in this repository lists the latest
-  version, release notes and a **minimum**. Anything older than the minimum is a **required
-  update**, meant for security or compatibility fixes.
-- **How it installs:** the plugin runs Orca's own `orca plugin update <its key>`. An update that
-  asks for no new access keeps its approval. One that asks for more (new capabilities, commands
-  or panels) is refused by Orca until **you** approve it, and the plugin never approves itself.
-- **The "Plugin updates" setting** decides what installs without asking:
-  - **All automatically**
-  - **Required automatically, ask for others** (default)
-  - **Ask before every update**
-- **Required updates:** if one cannot be installed (the policy says ask, or it needs approval),
-  the relay is turned off until it is installed. The status bar shows
-  `Cloudflare: update required`.
-- **Development copies** (`orca plugin dev load`) are never updated or blocked. Pull the
-  repository instead.
-
-**Relay Worker updates:**
-- **How it is detected:** the plugin compares the deployed Worker's `/health` version with the
-  Worker it ships (`worker/src/index.js`).
-- **Required relay updates:** when the deployed relay speaks an older protocol than the plugin, or
-  sits below `relay.minimum` in the manifest.
+**Relay Worker updates:** the relay runs in *your* Cloudflare account, so Orca can't update it.
+The plugin does that part.
+- **How it is detected:** 15 seconds after start, then every 6 hours (or **Check now**), the
+  plugin reads the deployed Worker's public `/health` version and compares it with the Worker it
+  ships (`worker/src/index.js`). Nothing else is fetched.
+- **Required relay updates:** when the deployed relay speaks an older protocol than the plugin.
 - **How it updates:** a redeploy keeps the same host id and keys, so **phones stay paired**.
-- **The "Relay Worker updates" setting** works the same way as for the plugin. Automatic relay
-  updates need a Cloudflare token kept on this computer ("Keep the Cloudflare API token");
-  otherwise the panel's Updates card asks for a token when you click **Update relay**.
+- **The "Relay Worker updates" setting** decides what deploys without asking: all updates,
+  required ones only (default), or none. Automatic relay updates need a Cloudflare token kept on
+  this computer ("Keep the Cloudflare API token"); otherwise the panel's update card asks for a
+  token when you click **Update relay**.
 - **Deploy-button relays** update from your GitHub copy, not from the plugin.
 
-**The status bar** shows `↑` when an optional update is available, and
-`Cloudflare: update required` for a required one.
+**The status bar** shows `↑` when a relay update is available, and `Update relay`
+for a required one.
 
 ### Releasing a new version (maintainers)
 
 1. Bump `version` in `orca-plugin.json`. If the Worker changed, bump `RELAY_VERSION` in
    `worker/src/index.js`, and `RELAY_PROTOCOL` only when the desktop-to-relay contract breaks.
-2. Update `update-manifest.json`: set `plugin.latest` and `relay.latest`, and raise `minimum`
-   only for fixes users must not skip. `npm test` checks that the manifest matches.
-3. Commit to `main` and tag `vX.Y.Z`. Orca's git updater follows the branch (or the newest tag
-   for tag installs).
+2. Set `plugin.latest` and `relay.latest` in `update-manifest.json` (read only by copies before
+   2.6.0). `npm test` checks that it matches.
+3. Run `orca plugin validate .` and `npm test`, commit to `main`, then tag and push:
+   `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`. The Orca directory lists the newest tag.
 
 ## What this plugin does on your machine
 
@@ -231,7 +225,6 @@ no dependencies besides a vendored MIT QR code generator.
 | --- | --- | --- |
 | `orca pair --mobile --address <endpoint> --json [--rotate] [--relay]` | You click **Show pairing QR code**, and again when a code is hidden or expires | Creates Orca's normal pairing code for your relay address, or replaces it so an old one stops working |
 | `orca plugin list --json` / `orca plugin open <this plugin> --panel cloudflare-relay` | First run, and the status bar item | Opens this plugin's own panel |
-| `orca plugin update <this plugin> --json` | You click **Update**, or a required update arrives and **Plugin updates** allows it | Installs a newer version through Orca's own updater, which keeps Orca's listing and approval checks |
 | `cloudflared tunnel run` / `cloudflared tunnel --url …` | Tunnel modes only, while the tunnel is on | Runs the Cloudflare tunnel. The tunnel token goes in an environment variable, never in the command line |
 | `tar -xzf` | macOS only, once, when it downloads `cloudflared` | Unpacks the downloaded `cloudflared` archive |
 | `ps -p <pid> -o comm=` | At startup, tunnel modes only | Stops a `cloudflared` this plugin left behind after a crash, and only if that pid really is `cloudflared` |
@@ -243,9 +236,8 @@ The Worker relay mode starts no processes at all. It opens WebSockets from the p
 | Host | When | What is sent |
 | --- | --- | --- |
 | `api.cloudflare.com` | Only during setup, update or removal, with the token you pasted | Deploys or deletes the relay Worker, or creates or deletes the tunnel and its DNS record, in **your** account |
-| Your relay Worker (`<name>.<you>.workers.dev` or the URL you entered) | While the relay is on | This desktop's relay key (in a header), and the phone traffic, which is end-to-end encrypted |
+| Your relay Worker (`<name>.<you>.workers.dev` or the URL you entered) | While the relay is on, plus a GET of its public `/health` every 6 hours to compare versions | This desktop's relay key (in a header), and the phone traffic, which is end-to-end encrypted |
 | `github.com/cloudflare/cloudflared/releases` | Tunnel modes, the first time only | Downloads `cloudflared` version 2026.11.1. Its SHA-256 is checked against values pinned in [`src/cloudflared-binary.mjs`](src/cloudflared-binary.mjs) before it is used. Skipped if you set **cloudflared path** |
-| `raw.githubusercontent.com` (this repository's `update-manifest.json`) | 15 seconds after start, then every 6 hours (the update settings control what is installed, not the check) | A plain GET with no identifiers. Nothing about you or your setup is sent. The relay Worker's public `/health` is also read to compare its version |
 | Your own address (custom mode) | Every 60 seconds while on | A plain HTTPS GET of `/web-index.html`, to show whether it reaches your Orca |
 | `127.0.0.1:<Orca port>` | For each relayed phone | The phone's encrypted traffic, handed to Orca's own mobile server |
 
@@ -256,7 +248,9 @@ plugin author: the relay runs in your own Cloudflare account.
 **Files and secrets**
 
 - **Secrets** (Cloudflare API token, tunnel token, relay key and admin or owner token) live in
-  Orca's plugin secret store. The API token is deleted right after setup unless you turn on
+  Orca's plugin secret store, which is encrypted with the OS key store. Where Orca reports none
+  (`secrets.protection` is `unavailable`, such as Linux without a keyring), setup stops and says
+  so rather than store them some other way. The API token is deleted right after setup unless you turn on
   **Keep the Cloudflare API token**.
 - **Plugin storage and settings** hold only non-secret state: the connection type, the Worker
   URL and host id, the tunnel id and hostname.
