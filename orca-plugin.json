@@ -4,8 +4,8 @@
   "execution": "trusted-worker",
   "id": "cloudflare-relay",
   "name": "Cloudflare Relay",
-  "version": "2.4.0",
-  "description": "Connect Orca Mobile to this desktop from anywhere through your free Cloudflare account. After installing, click \"Cloudflare: set up\" in the status bar (or run \"Set up / open panel\") and follow 3 steps. Phones pair with a normal QR code; no app changes needed.",
+  "version": "2.4.1",
+  "description": "Connect Orca Mobile to this desktop from anywhere through your free Cloudflare account. After installing, click \"Cloudflare: set up\" in the status bar (or run \"Set up / open panel\") and follow 3 steps. Phones pair with a normal QR code; no app changes needed. Not affiliated with Cloudflare.",
   "author": {
     "name": "truongthanhquan",
     "url": "https://github.com/truongthanhquan"
@@ -182,6 +182,27 @@
       }
     ]
   },
+  "cover": {
+    "path": "images/cover.png",
+    "alt": "Cloudflare Relay plugin: Orca Mobile connects to the Orca desktop through your own relay on Cloudflare; the panel shows a connected relay and a pairing QR code"
+  },
+  "screenshots": [
+    {
+      "path": "images/screenshot-setup.png",
+      "alt": "The setup panel with three steps: choose a connection, connect Cloudflare with a one-click token, pair your phone",
+      "caption": "Set up in 3 guided steps"
+    },
+    {
+      "path": "images/screenshot-pair.png",
+      "alt": "The pairing card showing a single-use QR code that expires in 5 minutes",
+      "caption": "Pair once with a QR code, end-to-end encrypted"
+    },
+    {
+      "path": "images/screenshot-manual.png",
+      "alt": "Manual setup for a tunnel on your own domain, without giving the plugin a Cloudflare token",
+      "caption": "Automatic, or set it up yourself without a token"
+    }
+  ],
   "capabilities": [
     {
       "kind": "storage:own"

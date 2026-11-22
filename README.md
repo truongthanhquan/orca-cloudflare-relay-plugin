@@ -1,5 +1,9 @@
 # Orca Cloudflare Relay
 
+![Orca Mobile, from anywhere: your own relay on Cloudflare](images/cover.png)
+
+> Community plugin for Orca. Not affiliated with or endorsed by Cloudflare, Inc.
+
 An [Orca](https://github.com/stablyai/orca) plugin that adds a third way for **Orca Mobile**
 to reach your desktop, alongside **LAN** and **Orca Relay**: **your own relay on Cloudflare's
 free plan**. That is either a one-click Worker + Durable Object relay, or a Cloudflare Tunnel.
