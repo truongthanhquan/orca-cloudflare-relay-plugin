@@ -5,17 +5,17 @@ Cloudflare Wrangler deployment config for the Orca relay runtime.
 
 ## What it does
 
-- Stores Cloudflare account, domain, Hyperdrive, JWKS, JWT, and director settings.
+- Stores only the public relay hostname and Orca authentication defaults.
 - Generates `.wrangler-deploy-cloudflare.jsonc` with separate director and edge hostnames.
 - Lets a panel download the generated config with the Orca save dialog.
-- Can discover your Cloudflare account, zone, and Hyperdrive configuration from a scoped API token.
+- Can discover your Cloudflare account and zone from a scoped API token.
 - Provides the same config generator as a standalone Node CLI.
 
 ## What it does not yet do automatically
 
 Orca plugins cannot replace the desktop pairing transport or deploy Durable Objects:
 That core implementation belongs in the Orca desktop and `cloud/apps/relay-edge` runtime.
-The plugin discovers account/zone/Hyperdrive resources and generates the compatible Worker config.
+The plugin discovers account/zone resources and generates the compatible Worker config.
 Actual Worker code deployment still uses Wrangler because the plugin cannot safely replace the
 desktop relay protocol implementation.
 
@@ -42,9 +42,8 @@ The plugin needs read access to:
 
 - Account Details
 - Workers Scripts
-- Workers R2 Storage? No — Hyperdrive and Workers Scripts are the relevant services.
+- Workers Scripts
 - Zone / DNS for custom domains
-- Hyperdrive configuration read/write
 
 Keep the token encrypted by the plugin secret store. Do not put it in the manifest,
 `wrangler.jsonc`, source control, or screenshots. Use one account-scoped token and
@@ -57,8 +56,6 @@ node bin/generate.mjs \
   --accountId 0123456789abcdef0123456789abcdef \
   --workerName orca-relay-edge \
   --domain relay.example.com \
-  --edgeDomain edge.relay.example.com \
-  --hyperdriveId abcdef0123456789abcdef0123456789 \
   --jwksUrl https://login.example.com/.well-known/jwks.json \
   --authIssuer https://login.example.com \
   --audience orca-relay \

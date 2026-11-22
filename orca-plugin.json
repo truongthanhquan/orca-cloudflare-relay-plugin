@@ -4,7 +4,7 @@
   "execution": "trusted-worker",
   "id": "cloudflare-relay",
   "name": "Cloudflare Relay Setup",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Generate a compatible Orca relay deployment configuration for Cloudflare Workers.",
   "author": { "name": "truongthanhquan" },
   "repository": "https://github.com/truongthanhquan/orca-cloudflare-relay-plugin",
@@ -28,23 +28,6 @@
         "type": "string",
         "placeholder": "relay.example.com",
         "maxLength": 253
-      },
-      {
-        "key": "edgeDomain",
-        "title": "Relay edge hostname",
-        "description": "A second public HTTPS hostname for the Worker edge/cell, for example edge.relay.example.com.",
-        "type": "string",
-        "placeholder": "edge.relay.example.com",
-        "maxLength": 253
-      },
-      {
-        "key": "postgresUrl",
-        "title": "Postgres URL",
-        "description": "The managed Postgres connection URL used by Hyperdrive. Keep this private; the plugin stores it as an encrypted secret.",
-        "type": "string",
-        "multiline": true,
-        "placeholder": "postgres://user:password@host:5432/database",
-        "maxLength": 2048
       },
       {
         "key": "authIssuer",

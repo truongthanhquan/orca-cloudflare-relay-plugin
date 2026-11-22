@@ -35,31 +35,26 @@
   </head>
   <body>
     <h1>Cloudflare Relay Setup</h1>
-    <p>Enter only the public hostnames and Postgres URL below. Account ID, Worker name, Hyperdrive ID, JWT audience, and admin issuer are discovered or generated where possible.</p>
+    <p>Enter a Cloudflare API token and one public relay hostname. Orca will discover the account and zone and generate one self-hosted Worker origin using Cloudflare Durable Object storage.</p>
     <label>Cloudflare API token</label>
     <input id="api-token" type="password" placeholder="Create a scoped API token in Cloudflare" />
     <label>Relay director hostname</label>
     <input id="relay-domain" placeholder="relay.example.com" />
-    <label>Edge/cell hostname</label>
-    <input id="edge-domain" placeholder="edge.relay.example.com" />
-    <label>Postgres URL</label>
-    <input id="postgres-url" type="password" placeholder="postgres://..." />
     <button id="generate">Generate config</button>
     <button id="download">Download .jsonc</button>
-    <button id="auto">Auto-discover account and Hyperdrive</button>
+    <button id="auto">Auto-discover account and zone</button>
     <p id="status"></p>
     <script>
       const status = document.getElementById('status')
       async function saveCredentials() {
         const apiToken = document.getElementById('api-token').value.trim()
-        const postgresUrl = document.getElementById('postgres-url').value.trim()
-        if (!apiToken || !postgresUrl) {
-          return { ok: false, error: 'API token and Postgres URL are required.' }
+        if (!apiToken) {
+          return { ok: false, error: 'Cloudflare API token is required.' }
         }
         try {
           return await orca.host.call('plugin.request', {
             name: 'save-secrets',
-            input: { apiToken, postgresUrl }
+            input: { apiToken }
           }).then((result) => result.output)
         } catch (error) {
           return { ok: false, error: `${error.code}: ${error.message}` }
@@ -75,12 +70,11 @@
           const result = await orca.host.call('plugin.request', {
             name: 'auto-setup',
             input: {
-              relayDomain: document.getElementById('relay-domain').value.trim(),
-              edgeDomain: document.getElementById('edge-domain').value.trim()
+              relayDomain: document.getElementById('relay-domain').value.trim()
             }
           })
           if (result.output?.ok) {
-            status.textContent = `Discovered account ${result.output.accountName}. Hyperdrive ${result.output.hyperdriveId} is ready. Generate and download the Worker config next.`
+            status.textContent = `Discovered account ${result.output.accountName}. Generate and download the Worker config next.`
           } else {
             status.textContent = result.output?.error ?? 'Cloudflare setup failed.'
           }

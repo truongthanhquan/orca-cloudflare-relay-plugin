@@ -39,36 +39,3 @@ export async function findZone(apiToken, accountId, hostname) {
   }
   return zone
 }
-
-export async function ensureHyperdrive(apiToken, accountId, postgresUrl) {
-  const url = new URL(postgresUrl)
-  if (!['postgres:', 'postgresql:'].includes(url.protocol)) {
-    throw new Error('Postgres URL must start with postgres:// or postgresql://.')
-  }
-  const origin = {
-    scheme: 'postgres',
-    host: url.hostname,
-    port: url.port ? Number(url.port) : 5432,
-    database: url.pathname.replace(/^\//, ''),
-    user: decodeURIComponent(url.username),
-    password: decodeURIComponent(url.password)
-  }
-  const configs = await cloudflareRequest(
-    apiToken,
-    'GET',
-    `/accounts/${accountId}/hyperdrive/configs`
-  )
-  const existing = Array.isArray(configs)
-    ? configs.find((item) => item?.origin?.database === origin.database && item?.origin?.host === origin.host)
-    : null
-  if (existing) return existing
-  return await cloudflareRequest(
-    apiToken,
-    'POST',
-    `/accounts/${accountId}/hyperdrive/configs`,
-    {
-      name: `orca-relay-${origin.database}`,
-      origin
-    }
-  )
-}

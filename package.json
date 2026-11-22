@@ -3,8 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test",
-    "generate": "node bin/generate.mjs"
+    "test": "node --test test/*.test.mjs",
+    "generate": "node bin/generate.mjs",
+    "auto-deploy": "node bin/auto-deploy.mjs"
   },
   "engines": {
     "node": ">=24"

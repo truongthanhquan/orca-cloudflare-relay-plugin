@@ -14,8 +14,6 @@ const input = Object.fromEntries(
     'accountId',
     'workerName',
     'domain',
-    'edgeDomain',
-    'hyperdriveId',
     'jwksUrl',
     'authIssuer',
     'audience',

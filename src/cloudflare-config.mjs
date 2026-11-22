@@ -1,10 +1,3 @@
-function hexId(value, name) {
-  if (!/^[a-f0-9]{32}$/i.test(value)) {
-    throw new Error(`${name} must be a 32-character hexadecimal Cloudflare ID`)
-  }
-  return value
-}
-
 function httpsUrl(value, name, originOnly = false) {
   let url
   try {
@@ -34,20 +27,26 @@ function hostname(value, name) {
 }
 
 export function generateCloudflareConfig(input) {
-  const accountId = hexId(String(input.accountId ?? '').trim(), 'Cloudflare account ID')
-  const hyperdriveId = hexId(String(input.hyperdriveId ?? '').trim(), 'Hyperdrive ID')
-  const workerName = String(input.workerName ?? '').trim()
+  const accountId = String(input.accountId ?? '').trim()
+  const workerName = String(input.workerName ?? 'orca-relay-edge').trim()
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(workerName)) {
     throw new Error('Worker name must contain only letters, numbers, hyphens, and underscores')
   }
-  const director = hostname(String(input.domain ?? '').trim(), 'Director hostname')
-  const edge = hostname(String(input.edgeDomain ?? '').trim(), 'Edge/cell hostname')
-  if (director === edge) {
-    throw new Error('Director and edge/cell hostnames must be different')
-  }
-  const jwksUrl = httpsUrl(String(input.jwksUrl ?? '').trim(), 'JWKS URL')
-  const authIssuer = httpsUrl(String(input.authIssuer ?? '').trim(), 'JWT issuer', true)
-  const adminIssuer = httpsUrl(String(input.adminIssuer ?? '').trim(), 'Director admin issuer', true)
+  const director = hostname(String(input.domain ?? input.relayDomain ?? '').trim(), 'Relay hostname')
+  const jwksUrl = httpsUrl(
+    String(input.jwksUrl ?? 'https://login.onorca.dev/.well-known/jwks.json').trim(),
+    'JWKS URL'
+  )
+  const authIssuer = httpsUrl(
+    String(input.authIssuer ?? 'https://login.onorca.dev').trim(),
+    'JWT issuer',
+    true
+  )
+  const adminIssuer = httpsUrl(
+    String(input.adminIssuer ?? 'https://login.onorca.dev').trim(),
+    'Director admin issuer',
+    true
+  )
   const audience = String(input.audience ?? 'orca-relay').trim()
   if (!audience) throw new Error('JWT audience is required')
 
@@ -71,9 +70,6 @@ export function generateCloudflareConfig(input) {
     { "tag": "v2", "new_sqlite_classes": ["SpliceRelay"] },
     { "tag": "v3", "new_sqlite_classes": ["UserHosts"] }
   ],
-  "hyperdrive": [
-    { "binding": "HYPERDRIVE", "id": ${JSON.stringify(hyperdriveId)} }
-  ],
   "vars": {
     "EDGE_BACKEND": "object",
     "EDGE_CELL_ID": "edge",
@@ -81,15 +77,12 @@ export function generateCloudflareConfig(input) {
     "RELAY_AUTH_ISSUER": ${JSON.stringify(authIssuer)},
     "RELAY_JWT_AUDIENCE": ${JSON.stringify(audience)},
     "ADMIN_ISSUER": ${JSON.stringify(adminIssuer)},
-    "DIRECTOR_HOSTNAME": ${JSON.stringify(director)},
-    "DIRECTOR_EDGE_URL": ${JSON.stringify(`https://${edge}`)},
     "PING_INTERVAL_MS": "30000",
     "SILENCE_TIMEOUT_MS": "75000",
     "ORPHAN_GRACE_MS": "30000"
   },
   "routes": [
-    { "pattern": ${JSON.stringify(director)}, "custom_domain": true },
-    { "pattern": ${JSON.stringify(edge)}, "custom_domain": true }
+    { "pattern": ${JSON.stringify(director)}, "custom_domain": true }
   ]
 }
 `
