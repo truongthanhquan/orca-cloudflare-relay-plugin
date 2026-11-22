@@ -19,17 +19,75 @@
         color: var(--orca-foreground, #ddd);
         cursor: pointer;
       }
+      label { display: block; margin-top: 10px; font-weight: 600; }
+      input {
+        width: min(600px, 100%);
+        box-sizing: border-box;
+        margin-top: 4px;
+        padding: 8px;
+        border: 1px solid var(--orca-border, #555);
+        border-radius: 6px;
+        background: var(--orca-background, #111);
+        color: var(--orca-foreground, #ddd);
+      }
       #status { min-height: 1.4em; white-space: pre-wrap; }
     </style>
   </head>
   <body>
     <h1>Cloudflare Relay Setup</h1>
-    <p>Set the Cloudflare fields in Orca Settings, generate the config, then download it.</p>
+    <p>Enter only the public hostnames and Postgres URL below. Account ID, Worker name, Hyperdrive ID, JWT audience, and admin issuer are discovered or generated where possible.</p>
+    <label>Cloudflare API token</label>
+    <input id="api-token" type="password" placeholder="Create a scoped API token in Cloudflare" />
+    <label>Relay director hostname</label>
+    <input id="relay-domain" placeholder="relay.example.com" />
+    <label>Edge/cell hostname</label>
+    <input id="edge-domain" placeholder="edge.relay.example.com" />
+    <label>Postgres URL</label>
+    <input id="postgres-url" type="password" placeholder="postgres://..." />
     <button id="generate">Generate config</button>
     <button id="download">Download .jsonc</button>
+    <button id="auto">Auto-discover account and Hyperdrive</button>
     <p id="status"></p>
     <script>
       const status = document.getElementById('status')
+      async function saveCredentials() {
+        const apiToken = document.getElementById('api-token').value.trim()
+        const postgresUrl = document.getElementById('postgres-url').value.trim()
+        if (!apiToken || !postgresUrl) {
+          return { ok: false, error: 'API token and Postgres URL are required.' }
+        }
+        try {
+          return await orca.host.call('plugin.request', {
+            name: 'save-secrets',
+            input: { apiToken, postgresUrl }
+          }).then((result) => result.output)
+        } catch (error) {
+          return { ok: false, error: `${error.code}: ${error.message}` }
+        }
+      }
+      document.getElementById('auto').addEventListener('click', async () => {
+        const saved = await saveCredentials()
+        if (!saved.ok) {
+          status.textContent = saved.error
+          return
+        }
+        try {
+          const result = await orca.host.call('plugin.request', {
+            name: 'auto-setup',
+            input: {
+              relayDomain: document.getElementById('relay-domain').value.trim(),
+              edgeDomain: document.getElementById('edge-domain').value.trim()
+            }
+          })
+          if (result.output?.ok) {
+            status.textContent = `Discovered account ${result.output.accountName}. Hyperdrive ${result.output.hyperdriveId} is ready. Generate and download the Worker config next.`
+          } else {
+            status.textContent = result.output?.error ?? 'Cloudflare setup failed.'
+          }
+        } catch (error) {
+          status.textContent = `${error.code}: ${error.message}`
+        }
+      })
       document.getElementById('generate').addEventListener('click', async () => {
         try {
           const result = await orca.host.call('plugin.request', {

@@ -8,13 +8,16 @@ Cloudflare Wrangler deployment config for the Orca relay runtime.
 - Stores Cloudflare account, domain, Hyperdrive, JWKS, JWT, and director settings.
 - Generates `.wrangler-deploy-cloudflare.jsonc` with separate director and edge hostnames.
 - Lets a panel download the generated config with the Orca save dialog.
+- Can discover your Cloudflare account, zone, and Hyperdrive configuration from a scoped API token.
 - Provides the same config generator as a standalone Node CLI.
 
-## What it does not do
+## What it does not yet do automatically
 
 Orca plugins cannot replace the desktop pairing transport or deploy Durable Objects:
-that core implementation belongs in the Orca desktop and `cloud/apps/relay-edge` runtime.
-The plugin is a setup/deployment configuration helper, not a second relay implementation.
+That core implementation belongs in the Orca desktop and `cloud/apps/relay-edge` runtime.
+The plugin discovers account/zone/Hyperdrive resources and generates the compatible Worker config.
+Actual Worker code deployment still uses Wrangler because the plugin cannot safely replace the
+desktop relay protocol implementation.
 
 The existing Orca iOS/Android app needs no rebuild when the generated relay is fully
 compatible with Orca relay-v1 and uses canonical HTTPS/WSS origins.
@@ -31,6 +34,21 @@ Configure the plugin under Orca Settings, then run:
 - **Cloudflare Relay: Generate deployment config**
 
 Open the **Cloudflare Relay** panel and download `.wrangler-deploy-cloudflare.jsonc`.
+
+### API token permissions
+
+Create a Cloudflare API token from **My Profile → API Tokens → Create Token**.
+The plugin needs read access to:
+
+- Account Details
+- Workers Scripts
+- Workers R2 Storage? No — Hyperdrive and Workers Scripts are the relevant services.
+- Zone / DNS for custom domains
+- Hyperdrive configuration read/write
+
+Keep the token encrypted by the plugin secret store. Do not put it in the manifest,
+`wrangler.jsonc`, source control, or screenshots. Use one account-scoped token and
+rotate it after setup.
 
 ## Standalone CLI
 

@@ -1,15 +1,12 @@
 import { generateCloudflareConfig } from './cloudflare-config.mjs'
+import { discoverCloudflare, ensureHyperdrive } from './cloudflare-api.mjs'
 
 const settingKeys = [
-  'accountId',
-  'workerName',
-  'domain',
+  'relayDomain',
   'edgeDomain',
-  'hyperdriveId',
-  'jwksUrl',
   'authIssuer',
-  'audience',
-  'adminIssuer'
+  'jwksUrl',
+  'postgresUrl'
 ]
 
 export default function activate(orca) {
@@ -44,6 +41,64 @@ export default function activate(orca) {
       const config = generateCloudflareConfig(settings)
       await orca.host.call('storage.set', { key: 'last-wrangler-config', value: config })
       return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  orca.panels?.handle?.('save-secrets', async (input) => {
+    if (typeof input?.apiToken !== 'string' || typeof input?.postgresUrl !== 'string') {
+      return { ok: false, error: 'Cloudflare API token and Postgres URL are required.' }
+    }
+    await orca.host.call('secrets.set', { key: 'cloudflareApiToken', value: input.apiToken })
+    await orca.host.call('secrets.set', { key: 'postgresUrl', value: input.postgresUrl })
+    return { ok: true }
+  })
+
+  orca.panels?.handle?.('auto-setup', async (input) => {
+    try {
+      const apiToken = await orca.host.call('secrets.get', { key: 'cloudflareApiToken' })
+      const postgresSecret = await orca.host.call('secrets.get', { key: 'postgresUrl' })
+      const token = apiToken?.value
+      const postgresUrl = postgresSecret?.value
+      if (typeof token !== 'string' || typeof postgresUrl !== 'string') {
+        return { ok: false, error: 'Save the Cloudflare API token and Postgres URL first.' }
+      }
+      const accounts = await discoverCloudflare(token)
+      const accountId = accounts[0].id
+      const relayDomain = String(input?.relayDomain ?? '').trim()
+      const edgeDomain = String(input?.edgeDomain ?? '').trim()
+      if (!relayDomain || !edgeDomain) {
+        return { ok: false, error: 'Relay and edge hostnames are required.' }
+      }
+      const zone = await import('./cloudflare-api.mjs').then(({ findZone }) =>
+        findZone(token, accountId, relayDomain)
+      )
+      const hyperdrive = await ensureHyperdrive(token, accountId, postgresUrl)
+      const settings = await readSettings()
+      const config = generateCloudflareConfig({
+        accountId,
+        workerName: 'orca-relay-edge',
+        domain: relayDomain,
+        edgeDomain,
+        hyperdriveId: hyperdrive.id,
+        jwksUrl: settings.jwksUrl,
+        authIssuer: settings.authIssuer,
+        audience: 'orca-relay',
+        adminIssuer: settings.authIssuer
+      })
+      await orca.host.call('storage.set', { key: 'last-wrangler-config', value: config })
+      await orca.host.call('storage.set', {
+        key: 'cloudflare-discovery',
+        value: { accountId, accountName: accounts[0].name, zoneId: zone.id, hyperdriveId: hyperdrive.id }
+      })
+      return {
+        ok: true,
+        accountId,
+        accountName: accounts[0].name,
+        hyperdriveId: hyperdrive.id,
+        zoneId: zone.id
+      }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
