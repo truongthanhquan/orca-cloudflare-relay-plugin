@@ -19,10 +19,23 @@ import {
   openPluginPanel,
   pairingDeviceToken,
   pairingRowFor,
-  readDeviceRegistry
+  readDeviceRegistry,
+  runPluginUpdate
 } from './orca-runtime.mjs'
-import { UPDATE_CHECK_INTERVAL_MS, UPDATE_POLICIES, bundledRelayInfo, compareVersions, evaluateRelayUpdate, shouldAutoInstall } from './updates.mjs'
+import {
+  UPDATE_CHECK_INTERVAL_MS,
+  UPDATE_POLICIES,
+  bundledRelayInfo,
+  compareVersions,
+  belowMinimum,
+  evaluateRelayUpdate,
+  fetchReleaseInfo,
+  higherMinimum,
+  shouldAutoInstall,
+  updateManifestUrl
+} from './updates.mjs'
 import { pluginCacheDir } from './paths.mjs'
+import { rememberHostId, rememberedHostId } from './relay-identity.mjs'
 import { qrSvg } from './qr.mjs'
 import { TunnelProcess } from './tunnel-process.mjs'
 import {
@@ -73,11 +86,16 @@ const KEYS = {
   apiToken: 'cloudflareApiToken',
   tunnelToken: 'cloudflareTunnelToken',
   hostKey: 'relayHostKey',
-  adminToken: 'relayAdminToken'
+  adminToken: 'relayAdminToken',
+  /** Highest published minimums seen: { plugin, relay }. Kept so going offline can't skip one. */
+  required: 'required-versions'
 }
 
 /** An error the user fixes in the panel's setup section (the panel opens it for them). */
 class SetupRequired extends Error {}
+
+/** A required (security) update is missing: the relay stays off until it is installed. */
+class UpdateRequired extends Error {}
 
 let tunnel = null
 let bridge = null
@@ -90,8 +108,9 @@ function errorMessage(error) {
 
 /**
  * Plugin updates are Orca's job (Settings → Plugins, and automatic catalog updates), so this
- * worker never updates itself. It only offers to redeploy the relay Worker in the user's own
- * Cloudflare account when the bundled Worker is newer than the deployed one.
+ * worker never updates itself on its own: it tells the person a newer version exists, and runs
+ * Orca's own updater only when they click Update now. It does redeploy the relay Worker in the user's own Cloudflare account when the
+ * bundled Worker is newer than the deployed one.
  * @param {import('orca/worker').OrcaWorkerApi} orca
  */
 export default function activate(orca) {
@@ -114,8 +133,9 @@ export default function activate(orca) {
 
   async function settings() {
     const all = (await orca.settings.get()) ?? {}
+    currentMode = MODES.includes(all.mode) ? all.mode : 'worker'
     return {
-      mode: MODES.includes(all.mode) ? all.mode : 'worker',
+      mode: currentMode,
       hostname: typeof all.hostname === 'string' ? all.hostname.trim() : '',
       tunnelName: (typeof all.tunnelName === 'string' && all.tunnelName.trim()) || 'orca-desktop',
       workerName: (typeof all.workerName === 'string' && all.workerName.trim()) || 'orca-relay',
@@ -153,8 +173,17 @@ export default function activate(orca) {
     return isConfigured
   }
 
-  /** Latest relay Worker check: { checkedAt, error, relay: {...} }. */
-  const updates = { checkedAt: null, error: null, relay: null }
+  /** This plugin's key in Orca (`local.…` for a development folder), found through the CLI. */
+  let ownKey = null
+  /** Latest check: { checkedAt, error, plugin: notice only, relay: {...} }. */
+  const updates = { checkedAt: null, error: null, plugin: null, relay: null }
+  /** Highest published minimums seen so far (kept in storage, so offline can't skip one). */
+  let required = { plugin: null, relay: null }
+  /** Last known version of the deployed relay Worker: { version, protocol }. */
+  let relayState = null
+  /** The connection type in use (a relay Worker minimum only applies to the Worker relay). */
+  let currentMode = null
+  let blockedNow = false
 
   function renderStatusBar(status) {
     const label = status.mode === 'worker' ? 'Cloudflare relay' : status.mode === 'custom' ? 'Your own address' : 'Cloudflare tunnel'
@@ -178,14 +207,19 @@ export default function activate(orca) {
         tooltip: 'Cloudflare Relay is not set up yet. Click to connect Orca Mobile through your free Cloudflare account (about 2 minutes).'
       })
     }
-    if (updates.relay?.mandatory && status.state !== 'error') {
+    const blocked = blockReason()
+    if (blocked) {
+      Object.assign(view, { text: 'Update required', tone: 'danger', icon: 'warning', tooltip: `${blocked} Click to open Cloudflare Relay.` })
+    } else if (updates.relay?.mandatory && status.state !== 'error') {
       view.text = 'Update relay'
       view.tone = 'warning'
       view.icon = 'warning'
       view.tooltip = `The relay Worker must be redeployed. ${view.tooltip}`
-    } else if (updates.relay?.available) {
-      view.text = `${view.text} ↑`
-      view.tooltip = `A relay Worker update is available. ${view.tooltip}`
+    } else if (updates.relay?.available || updates.plugin?.available) {
+      view.text = `${view.text} · update`
+      view.tooltip = updates.relay?.available
+        ? `A relay Worker update is available. ${view.tooltip}`
+        : `Update available: Cloudflare Relay ${updates.plugin.latest}. Click to update. ${view.tooltip.replace(/ Click to open Cloudflare Relay\.$/, '')}`
     }
     orca.host.call('statusBar.update', { id: STATUS_ITEM, ...view }).catch(() => {})
   }
@@ -211,16 +245,19 @@ export default function activate(orca) {
   }
 
   async function startTunnel() {
+    const blocked = blockReason()
+    if (blocked) throw new UpdateRequired(blocked)
     const config = await settings()
     const { port } = await findOrcaWebSocketPort({ override: config.localPort })
 
     if (config.mode === 'worker') {
       use(bridge)
-      const relay = await orca.storage.get(KEYS.worker)
+      let relay = await orca.storage.get(KEYS.worker)
       const hostKey = await orca.secrets.get(KEYS.hostKey)
       if (!relay?.workerUrl || !relay?.hostId || !hostKey) {
         throw new SetupRequired('Cloudflare Relay is not set up yet. Choose a connection type in Setup.')
       }
+      relay = await adoptPairedIdentity(relay, hostKey)
       bridge.start({ workerUrl: relay.workerUrl, hostId: relay.hostId, hostKey, port })
       await orca.storage.set(KEYS.enabled, true)
       if (relay.deployedBy === 'button' && !relay.ownerClaimed) {
@@ -335,8 +372,6 @@ export default function activate(orca) {
   async function setupWorker(input) {
     const config = await settings()
     const previous = await orca.storage.get(KEYS.worker)
-    // Keep the same host id and key across redeploys so paired phones keep working.
-    const hostId = previous?.hostId ?? randomSecret(16)
     const hostKey = (await orca.secrets.get(KEYS.hostKey)) ?? randomSecret(32)
     const usingWorkerUrl = typeof input?.workerUrl === 'string' && input.workerUrl.trim()
     if (!usingWorkerUrl && !(typeof input?.apiToken === 'string' && input.apiToken.trim()) && !(await orca.secrets.get(KEYS.apiToken))) {
@@ -386,14 +421,52 @@ export default function activate(orca) {
     }
     bridge.setStatus({ state: 'starting', message: `Waiting for ${new URL(relay.workerUrl).host} to come online…` })
     const health = await waitForRelay(relay.workerUrl)
+    // Paired phones dial <worker>/v1/c/<hostId>: reuse the id this machine already registered on
+    // this Worker (by any copy of the plugin), then this copy's own, so no phone has to pair again.
+    const hostId = (await rememberedHostId(relay.workerUrl)) ?? previous?.hostId ?? randomSecret(16)
     bridge.setStatus({ state: 'starting', message: 'Registering this desktop with the relay…' })
     await registerRelayHost({ workerUrl: relay.workerUrl, hostId, hostKey, adminToken })
+    await rememberHostId(relay.workerUrl, hostId).catch((error) => log(`Could not record the relay identity: ${errorMessage(error)}`))
     await orca.secrets.set(KEYS.hostKey, hostKey)
     if (usingWorkerUrl) await orca.secrets.set(KEYS.adminToken, adminToken)
-    await saveState(KEYS.worker, { ...relay, hostId, ...(usingWorkerUrl ? { ownerClaimed: locksOwner(health) } : {}) })
+    await saveState(KEYS.worker, {
+      ...relay,
+      hostId,
+      relayVersion: health?.version ?? null,
+      relayProtocol: health?.protocol ?? null,
+      ...(usingWorkerUrl ? { ownerClaimed: locksOwner(health) } : {})
+    })
+    if (health?.version) relayState = { version: health.version, protocol: health.protocol ?? 1 }
     // Least privilege: the token can edit every Worker in the account and is only needed to
     // deploy, so forget it unless the user asked to keep it (Cloudflare can also revoke it).
     if (!config.keepApiToken) await orca.secrets.delete(KEYS.apiToken)
+  }
+
+  /**
+   * Keeps the address paired phones know. Installs from before 2.6.0 record their host id here
+   * on first start. When another copy of the plugin on this machine (a reinstall, a development
+   * folder) registered a different id on the same Worker, phones were paired with that one, so
+   * take it over by registering it with this copy's key. Falls back to this copy's own id when
+   * the relay refuses (for example, the other copy redeployed with a newer admin secret).
+   */
+  async function adoptPairedIdentity(relay, hostKey) {
+    const remembered = await rememberedHostId(relay.workerUrl).catch(() => null)
+    if (!remembered) {
+      await rememberHostId(relay.workerUrl, relay.hostId, { ifAbsent: true }).catch((error) => log(`Could not record the relay identity: ${errorMessage(error)}`))
+      return relay
+    }
+    if (remembered === relay.hostId) return relay
+    const adminToken = await orca.secrets.get(KEYS.adminToken)
+    try {
+      await registerRelayHost({ workerUrl: relay.workerUrl, hostId: remembered, hostKey, adminToken, timeoutMs: 15_000 })
+    } catch (error) {
+      log(`Phones paired through another copy of this plugin use a different relay address; keeping this copy's own (${errorMessage(error)}). Run setup again to take it over.`)
+      return relay
+    }
+    const adopted = { ...relay, hostId: remembered }
+    await saveState(KEYS.worker, adopted)
+    log('Switched to the relay address your paired phones already use.')
+    return adopted
   }
 
   /** Relay 1.2.0+ locks a Deploy-button Worker to the first owner token it sees. */
@@ -597,7 +670,7 @@ export default function activate(orca) {
   // ---------------------------------------------------------------- updates
 
   function updatesView() {
-    return { checkedAt: updates.checkedAt, error: updates.error, relay: updates.relay }
+    return { checkedAt: updates.checkedAt, error: updates.error, plugin: updates.plugin, relay: updates.relay }
   }
 
   function publishUpdates() {
@@ -612,18 +685,123 @@ export default function activate(orca) {
     return payload?.service === 'orca-cloudflare-relay' ? { version: payload.version, protocol: payload.protocol ?? 1 } : null
   }
 
-  /** Compares the deployed relay Worker with the one bundled in this plugin (no other network calls). */
+
+  async function loadRequired() {
+    const stored = (await orca.storage.get(KEYS.required)) ?? {}
+    required = { plugin: higherMinimum(required.plugin, stored.plugin), relay: higherMinimum(required.relay, stored.relay) }
+    const relay = await orca.storage.get(KEYS.worker)
+    if (!relayState && relay?.relayVersion) relayState = { version: relay.relayVersion, protocol: relay.relayProtocol ?? 1 }
+  }
+
+  async function raiseRequired(info) {
+    const next = { plugin: higherMinimum(required.plugin, info?.plugin?.minimum), relay: higherMinimum(required.relay, info?.relay?.minimum) }
+    if (next.plugin !== required.plugin || next.relay !== required.relay) {
+      required = next
+      await saveState(KEYS.required, required)
+    }
+  }
+
+  /**
+   * Why the relay must stay off, or null. A plugin version below the published minimum has a
+   * known security problem (development copies are exempt); so does a relay Worker below its
+   * minimum or on an older protocol. Fail closed: phones can't reach this desktop until fixed.
+   */
+  function blockReason() {
+    const plugin = updates.plugin
+    if (belowMinimum(PLUGIN_VERSION, required.plugin) && !plugin?.isDev && plugin?.status !== 'updated') {
+      return `This version of Cloudflare Relay (${PLUGIN_VERSION}) has a known security problem, so the relay is off. Update to ${required.plugin} or newer: click Update now in the Cloudflare Relay panel.`
+    }
+    if (currentMode !== 'worker' || !relayState?.version) return null
+    const relayRequired = belowMinimum(relayState.version, required.relay) || !(relayState.protocol >= MIN_RELAY_PROTOCOL)
+    if (!relayRequired) return null
+    if (belowMinimum(bundledRelayInfo().version, required.relay)) {
+      return `The relay Worker in your Cloudflare account (${relayState.version}) has a known security problem, so the relay is off. Update the plugin first: it brings the fixed Worker.`
+    }
+    return `The relay Worker in your Cloudflare account (${relayState.version}) must be updated before it can be used again, so the relay is off. Click Update relay in the Cloudflare Relay panel (it keeps your phones paired).`
+  }
+
+  /** Stops a running relay that became unsafe, and resumes it once the problem is fixed. */
+  function enforceRequired() {
+    const blocked = blockReason()
+    if (blocked && !blockedNow) {
+      blockedNow = true
+      if (active.wanted || active.status.state !== 'stopped') {
+        // Not stopTunnel(): the relay stays "on" for the person and resumes after the update.
+        active.stop({ silent: true })
+        fail(new UpdateRequired(blocked))
+      }
+    } else if (!blocked && blockedNow) {
+      blockedNow = false
+      const idle = active.status.state === 'stopped' || active.status.state === 'error'
+      if (idle) orca.storage.get(KEYS.enabled).then((on) => on === true && startInBackground()).catch(() => {})
+    }
+    renderStatusBar(currentStatus())
+  }
+
+  /** Is a newer plugin published, and is this version still allowed? */
+  async function checkPluginRelease(config, info) {
+    const latest = info?.plugin?.latest ?? required.plugin
+    if (!latest || compareVersions(latest, PLUGIN_VERSION) <= 0) return { available: false, current: PLUGIN_VERSION, latest: latest ?? PLUGIN_VERSION }
+    const cli = findOrcaCli({ override: config.orcaCliPath || undefined })
+    ownKey ??= cli ? await findOwnPluginKey({ cli, pluginId: MANIFEST.id, version: PLUGIN_VERSION }).catch(() => null) : null
+    const keep = updates.plugin?.latest === latest ? { status: updates.plugin.status, added: updates.plugin.added, message: updates.plugin.message } : { status: 'idle' }
+    return {
+      available: true,
+      mandatory: belowMinimum(PLUGIN_VERSION, required.plugin),
+      current: PLUGIN_VERSION,
+      latest,
+      notes: info?.plugin?.notes ?? '',
+      pluginKey: ownKey,
+      isDev: Boolean(ownKey?.startsWith('local.')),
+      ...keep
+    }
+  }
+
+  /** Update now: Orca's own updater, started by the person's click. */
+  async function updatePluginNow() {
+    const plugin = updates.plugin
+    if (!plugin?.available) throw new Error('This is already the newest version.')
+    if (plugin.isDev) throw new Error('This is a development copy: pull the repository to update it.')
+    const config = await settings()
+    const cli = findOrcaCli({ override: config.orcaCliPath || undefined })
+    ownKey ??= cli ? await findOwnPluginKey({ cli, pluginId: MANIFEST.id, version: PLUGIN_VERSION }).catch(() => null) : null
+    if (!cli || !ownKey) throw new Error('Orca could not be reached from the plugin. Update it in Orca Settings → Plugins instead.')
+    updates.plugin = { ...plugin, status: 'installing', message: null }
+    publishUpdates()
+    try {
+      const outcome = await runPluginUpdate({ cli, pluginKey: ownKey })
+      updates.plugin = outcome.status === 'approval_required'
+        ? { ...updates.plugin, status: 'approval_required', added: outcome.added }
+        : outcome.status === 'updated'
+          ? { ...updates.plugin, status: 'updated' }
+          : { ...updates.plugin, status: 'failed', message: `Orca answered "${outcome.status}": the new version may not be published yet. Try again later.` }
+    } catch (error) {
+      updates.plugin = { ...updates.plugin, status: 'failed', message: errorMessage(error) }
+    }
+    publishUpdates()
+    return updatesView()
+  }
+
+  /** Compares the deployed relay Worker with the bundled one, and looks for a newer plugin. */
   async function checkForUpdates({ apply = true } = {}) {
     const config = await settings()
     const relay = config.mode === 'worker' ? await orca.storage.get(KEYS.worker) : null
     updates.error = null
+    currentMode = config.mode
+    await loadRequired()
+    const url = updateManifestUrl(MANIFEST.repository)
+    const info = url ? await fetchReleaseInfo(url).catch(() => null) : null
+    await raiseRequired(info)
+    updates.plugin = await checkPluginRelease(config, info).catch(() => updates.plugin)
     if (relay?.workerUrl) {
       const deployed = await relayHealth(relay.workerUrl).catch((error) => {
         updates.error = `Could not reach the relay Worker: ${errorMessage(error)}`
         return null
       })
       if (deployed) {
-        const evaluated = evaluateRelayUpdate({ deployed, bundled: bundledRelayInfo(), minProtocol: MIN_RELAY_PROTOCOL })
+        relayState = deployed
+        if (relay.relayVersion !== deployed.version) await saveState(KEYS.worker, { ...relay, relayVersion: deployed.version, relayProtocol: deployed.protocol })
+        const evaluated = evaluateRelayUpdate({ deployed, bundled: bundledRelayInfo(), minProtocol: MIN_RELAY_PROTOCOL, minimum: required.relay })
         const keep = updates.relay?.latest === evaluated.latest && updates.relay?.deployed === evaluated.deployed
           ? { status: updates.relay.status, message: updates.relay.message }
           : { status: 'idle', message: null }
@@ -634,13 +812,16 @@ export default function activate(orca) {
     }
     updates.checkedAt = Date.now()
     publishUpdates()
+    enforceRequired()
     if (apply) await applyUpdatePolicies(config)
     return updatesView()
   }
 
   async function applyUpdatePolicies(config) {
     const relay = updates.relay
-    if (relay && relay.status === 'idle' && relay.deployedBy === 'plugin' && shouldAutoInstall(config.relayUpdates, relay) && (await orca.secrets.get(KEYS.apiToken))) {
+    // A required relay update deploys by itself (default policy) when a token is kept; it can only
+    // deploy the Worker this plugin ships, so one that needs a newer plugin waits for it.
+    if (relay && relay.status === 'idle' && relay.deployedBy === 'plugin' && !relay.needsPlugin && shouldAutoInstall(config.relayUpdates, relay) && (await orca.secrets.get(KEYS.apiToken))) {
       await updateRelay().catch((error) => log(`Automatic relay update failed: ${errorMessage(error)}`))
     }
   }
@@ -707,6 +888,7 @@ export default function activate(orca) {
   })
   handle('pair', pairingOffer)
   handle('check-updates', () => checkForUpdates())
+  handle('update-plugin', async () => ({ updates: await updatePluginNow() }))
   handle('update-relay', async (input) => ({ updates: await updateRelay(input) }))
   handle('verify-token', async (input) => {
     const candidate = typeof input?.apiToken === 'string' && input.apiToken.trim()
@@ -744,7 +926,6 @@ export default function activate(orca) {
     await exclusive(stopTunnel)
     return 'Cloudflare Relay stopped.'
   })
-  let ownKey = null
   async function openPanel() {
     const config = await settings()
     const cli = findOrcaCli({ override: config.orcaCliPath || undefined })
@@ -789,11 +970,15 @@ export default function activate(orca) {
   // Resume with Orca when the user left it on.
   ;(async () => {
     const config = await settings()
+    // Known minimums first, so a version with a known security problem never starts, even offline.
+    await loadRequired()
+    blockedNow = Boolean(blockReason())
+    renderStatusBar(currentStatus())
     if (config.autoStart && (await orca.storage.get(KEYS.enabled)) === true) {
       await startInBackground()
       // A host call can fail transiently while Orca is still settling a (re)loaded plugin's
       // consent; retry once rather than leaving the relay in an error state.
-      if (active.status.state === 'error' && !active.status.needsSetup) {
+      if (active.status.state === 'error' && !active.status.needsSetup && !blockReason()) {
         await new Promise((resolve) => updateTimers.push(setTimeout(resolve, 5000)))
         await startInBackground()
       }

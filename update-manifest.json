@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "plugin": {
-    "latest": "2.6.0",
+    "latest": "2.6.1",
     "minimum": "2.1.0",
-    "notes": "2.6.0 follows Orca's plugin guide: the plugin no longer updates itself. Update it from Orca (Settings → Plugins → Update); listed copies update automatically. Also checks for an OS key store before setup."
+    "notes": "2.6.1: phones stay paired through plugin updates, relay redeploys and reinstalls, and the panel shows where to update the plugin in Orca. Since 2.6.0 Orca installs plugin updates (Settings → Plugins → Update); coming from 2.5.x, Orca asks you once to review it."
   },
   "relay": {
     "latest": "1.2.0",

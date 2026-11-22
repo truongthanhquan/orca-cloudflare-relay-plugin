@@ -35,6 +35,7 @@
       .connected .dot { background: #2fb36d; }
       .starting .dot { background: #e0a526; }
       .error .dot { background: var(--orca-destructive, #e5484d); }
+      #plugin-update-cli { user-select: all; }
       code, .mono { font-family: var(--orca-font-mono, ui-monospace, monospace); font-size: 12px; word-break: break-all; }
       label.field { display: block; margin: 10px 0 4px; font-weight: 600; }
       input[type='text'], input[type='password'], select {
@@ -129,10 +130,24 @@
     <h1>Cloudflare Relay</h1>
     <p class="muted" id="tagline">Connect Orca Mobile to this computer from anywhere, through Cloudflare.</p>
 
-    <!-- Relay Worker updates (only when one is available). Plugin updates are Orca's: Settings → Plugins. -->
+    <!-- Updates (only when one is available). The plugin itself is updated by Orca: this card only says where. -->
     <div class="card hidden" id="updates-card">
-      <h2 id="updates-title">Relay update available</h2>
-      <div id="relay-update" class="hidden">
+      <h2 id="updates-title">Update available</h2>
+      <div id="plugin-update" class="hidden">
+        <p><b id="plugin-update-title">A new version is ready</b> <span id="plugin-update-versions" class="mono muted"></span> <span id="plugin-required" class="badge error hidden"><span class="dot"></span>Required</span></p>
+        <p id="plugin-update-notes" class="muted"></p>
+        <div class="row" id="plugin-update-actions"><button id="update-plugin" class="primary">Update now</button></div>
+        <p id="plugin-update-status" style="margin-top:6px"></p>
+        <details id="plugin-update-other" style="margin-top:6px">
+          <summary class="muted">Other ways to update</summary>
+          <ol class="muted" style="margin:6px 0 0 18px; padding:0">
+            <li>Open Orca <b>Settings → Plugins</b>.</li>
+            <li>Find <b>Cloudflare Relay</b> and click <b>Update</b> (or <b>Review</b> if Orca asks).</li>
+          </ol>
+          <p class="muted" style="margin-top:6px">Or in a terminal: <code id="plugin-update-cli" class="mono"></code></p>
+        </details>
+      </div>
+      <div id="relay-update" class="hidden" style="margin-top:10px">
         <p><b>Relay Worker</b> <span id="relay-update-versions" class="mono"></span> <span id="relay-required" class="badge error hidden"><span class="dot"></span>Required</span></p>
         <p id="relay-update-notes" class="muted"></p>
         <div id="relay-token" class="hidden">
@@ -313,7 +328,7 @@
         <button class="link" id="change-setup">Change setup</button>
       </div>
       <p class="muted" id="summary-detail" style="margin:4px 0 6px"></p>
-      <p class="muted" style="margin:0">Version <span id="version"></span> · <span id="update-check-text">Checking the relay…</span> <button class="link" id="check-updates">Check now</button></p>
+      <p class="muted" style="margin:0">Version <span id="version"></span> · <span id="update-check-text">Checking for updates…</span> <button class="link" id="check-updates">Check now</button></p>
       <div class="row" style="margin-top:8px"><button id="remove" class="danger">Remove setup</button></div>
       <p id="summary-error" class="error-text" style="margin-top:6px"></p>
     </div>
@@ -660,31 +675,67 @@
         if (!u) return
         snap.updates = u
         const relay = u.relay && u.relay.available ? u.relay : null
-        show($('updates-card'), Boolean(relay))
-        $('updates-card').classList.toggle('attention', Boolean(relay && relay.mandatory))
-        $('updates-title').textContent = relay && relay.mandatory ? 'Relay update required' : 'Relay update available'
+        const plugin = u.plugin && u.plugin.available ? u.plugin : null
+        show($('updates-card'), Boolean(relay || plugin))
+        const required = Boolean((relay && relay.mandatory) || (plugin && plugin.mandatory && !plugin.isDev))
+        $('updates-card').classList.toggle('attention', required)
+        $('updates-title').textContent = required ? 'Update required' : 'Update available'
+        show($('plugin-update'), Boolean(plugin))
+        if (plugin) {
+          const status = plugin.status || 'idle'
+          $('plugin-update-title').textContent = status === 'updated' ? 'Updated' : plugin.mandatory ? 'Security update' : 'A new version is ready'
+          show($('plugin-required'), Boolean(plugin.mandatory) && status !== 'updated')
+          $('plugin-update-versions').textContent = `${plugin.current} → ${plugin.latest}`
+          $('plugin-update-notes').textContent = status === 'updated' ? '' : plugin.notes || ''
+          $('plugin-update-cli').textContent = `orca plugin update ${plugin.pluginKey || 'truongthanhquan.cloudflare-relay'}`
+          show($('plugin-update-actions'), !plugin.isDev && (status === 'idle' || status === 'failed' || status === 'installing'))
+          $('update-plugin').disabled = status === 'installing'
+          $('update-plugin').textContent = status === 'installing' ? 'Updating…' : status === 'failed' ? 'Try again' : 'Update now'
+          show($('plugin-update-other'), !plugin.isDev && status !== 'updated')
+          $('plugin-update-other').open = status === 'approval_required' || status === 'failed'
+          const added = (plugin.added || []).join(', ')
+          $('plugin-update-status').textContent = plugin.isDev
+            ? 'This is a development copy: pull the repository to update it.'
+            : {
+                idle: plugin.mandatory
+                  ? 'This version has a known security problem, so the relay is off until you update. Takes a few seconds; your setup and paired phones are kept.'
+                  : 'Takes a few seconds. Your setup and paired phones are kept.',
+                installing: 'Orca is installing the update…',
+                updated: `✅ Updated to ${plugin.latest}. Orca restarts the plugin; this panel refreshes in a moment.`,
+                approval_required: `Orca needs your OK first${added ? ` because this version adds: ${added}` : ''}. Open Orca Settings → Plugins → Cloudflare Relay and approve the update there.`,
+                failed: `The update did not finish: ${plugin.message || 'unknown error'}`
+              }[status] || ''
+          $('plugin-update-status').className = status === 'failed' ? 'error-text' : status === 'updated' ? 'ok' : 'muted'
+        }
         show($('relay-update'), Boolean(relay))
         if (relay) {
           const viaButton = relay.deployedBy === 'button'
           $('relay-update-versions').textContent = `${relay.deployed} → ${relay.latest}`
           show($('relay-required'), relay.mandatory)
           $('relay-update-notes').textContent = relay.notes || ''
-          show($('relay-token'), !viaButton && !snap.hasApiToken)
-          show($('update-relay'), !viaButton)
+          show($('relay-token'), !viaButton && !snap.hasApiToken && !relay.needsPlugin)
           $('update-relay').disabled = relay.status === 'installing'
-          $('relay-update-message').textContent = viaButton
-            ? 'Deployed with the Deploy to Cloudflare button: update it from your GitHub copy.'
-            : relay.message || ''
+          $('relay-update-message').textContent = relay.needsPlugin
+            ? 'This fix comes with a newer plugin: update the plugin first, then the relay updates.'
+            : viaButton
+              ? `Deployed with the Deploy to Cloudflare button: update it from your GitHub copy.${relay.mandatory ? ' The relay is off until then.' : ''}`
+              : relay.message || (relay.mandatory ? 'The relay is off until the Worker is updated. Updating keeps your phones paired.' : '')
+          show($('update-relay'), !viaButton && !relay.needsPlugin)
         }
         $('update-check-text').textContent = u.error
           ? u.error
-          : u.checkedAt ? `relay checked ${new Date(u.checkedAt).toLocaleTimeString()}${relay ? '' : ', up to date'}` : 'Checking the relay…'
+          : u.checkedAt ? `checked ${new Date(u.checkedAt).toLocaleTimeString()}${relay || plugin ? '' : ', up to date'}` : 'Checking for updates…'
       }
       $('check-updates').addEventListener('click', () => withButton($('check-updates'), async () => {
         $('update-check-text').textContent = 'Checking…'
         const result = await request('check-updates')
         if (result.ok) renderUpdates(result)
         else $('update-check-text').textContent = result.error
+      }))
+      $('update-plugin').addEventListener('click', () => withButton($('update-plugin'), async () => {
+        const result = await request('update-plugin', undefined, 120000)
+        if (result.updates) renderUpdates(result.updates)
+        else if (!result.ok) $('plugin-update-status').textContent = result.error
       }))
       $('update-relay').addEventListener('click', () => withButton($('update-relay'), async () => {
         const result = await request('update-relay', { apiToken: $('relay-api-token').value.trim() }, 120000)

@@ -178,6 +178,31 @@ export function pickOwnPluginKey(result, options) {
   return pickOwnPlugin(result, options)?.pluginKey ?? null
 }
 
+/**
+ * Runs Orca's own updater for this plugin, only when the person clicks Update now. Orca applies
+ * its usual checks; an update that asks for more access is refused (approval_required) and must
+ * be approved by the person in Orca, never by the plugin.
+ */
+export async function runPluginUpdate({ cli, pluginKey }) {
+  const { code, stdout, stderr } = await runCli(cli, ['plugin', 'update', pluginKey, '--json'], { timeoutMs: 180_000 })
+  let payload = null
+  try {
+    payload = JSON.parse(stdout.slice(stdout.indexOf('{')))
+  } catch {
+    // Non-JSON failure output.
+  }
+  const result = payload?.result ?? payload
+  if (code === 3 || payload?.error?.code === 'approval_required' || payload?.error?.code === 'approval_stale') {
+    const growth = payload?.error?.data?.update?.growth
+    const added = [...(growth?.capabilities ?? []).map((kind) => `access "${kind}"`), ...(growth?.contributions ?? [])]
+    return { status: 'approval_required', added: added.slice(0, 8) }
+  }
+  if (code !== 0 || payload?.ok === false) {
+    throw new Error(payload?.error?.message?.split('\n')[0] ?? (stderr || stdout || `orca plugin update exited ${code}`).trim().split('\n')[0])
+  }
+  return { status: result?.status ?? 'updated', version: result?.version ?? null }
+}
+
 /** Shows one of this plugin's panels in Orca's right sidebar (there is no host API for it). */
 export async function openPluginPanel({ cli, pluginKey, panel }) {
   const { code, stdout, stderr } = await runCli(cli, ['plugin', 'open', pluginKey, '--panel', panel], { timeoutMs: 15_000 })
