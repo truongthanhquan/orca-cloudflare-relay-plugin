@@ -478,6 +478,37 @@ export default function activate(orca) {
     return adopted
   }
 
+  /**
+   * Emergency: cut every phone off the Cloudflare route at once (for a lost or stolen phone when
+   * you can't tell which "Mobile <date>" entry it is). Phones dial <worker>/v1/c/<hostId>, so this
+   * registers a new host id and key, makes the old id unusable where the relay allows it, and
+   * remembers the new id machine-wide so no other copy of the plugin switches back. Phones stay
+   * paired in Orca (revoke them there); the ones you keep must pair again to use Cloudflare.
+   */
+  async function disconnectAllPhones() {
+    if (currentMode !== 'worker') throw new Error('This works with the Worker relay. For other connection types, remove phones on Orca\'s Mobile page.')
+    const relay = await orca.storage.get(KEYS.worker)
+    if (!relay?.workerUrl || !relay?.hostId) throw new SetupRequired('Cloudflare Relay is not set up yet.')
+    const adminToken = await orca.secrets.get(KEYS.adminToken)
+    const hostId = randomSecret(16)
+    const hostKey = randomSecret(32)
+    await registerRelayHost({ workerUrl: relay.workerUrl, hostId, hostKey, adminToken, timeoutMs: 20_000 })
+    if (relay.deployedBy === 'plugin') {
+      // The admin may re-key any id: give the old one a key nobody holds, so no copy can serve it.
+      await registerRelayHost({ workerUrl: relay.workerUrl, hostId: relay.hostId, hostKey: randomSecret(32), adminToken, timeoutMs: 20_000 })
+        .catch((error) => log(`The old relay address stays registered but unused: ${errorMessage(error)}`))
+    }
+    await orca.secrets.set(KEYS.hostKey, hostKey)
+    await saveState(KEYS.worker, { ...relay, hostId })
+    await rememberHostId(relay.workerUrl, hostId)
+    await invalidatePairingCode('all phones were disconnected from the relay')
+    log('Disconnected every phone from the relay: it now has a new address. Pair the phones you keep again.')
+    if ((await orca.storage.get(KEYS.enabled)) === true) {
+      bridge.stop({ silent: true })
+      await startTunnel()
+    }
+  }
+
   /** Relay 1.2.0+ locks a Deploy-button Worker to the first owner token it sees. */
   function locksOwner(health) {
     return health?.service === 'orca-cloudflare-relay' && compareVersions(String(health.version ?? '0'), '1.2.0') >= 0
@@ -906,6 +937,10 @@ export default function activate(orca) {
     const relay = await orca.storage.get(KEYS.worker)
     const named = await orca.storage.get(KEYS.named)
     return verifyCloudflareToken(createCloudflareClient(token), relay?.accountId ?? named?.accountId)
+  })
+  handle('disconnect-all-phones', async () => {
+    await exclusive(disconnectAllPhones)
+    return snapshot()
   })
   handle('invalidate-pairing', async () => {
     await invalidatePairingCode('you hid the pairing code')

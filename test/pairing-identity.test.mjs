@@ -141,3 +141,37 @@ test('a copy that registered its own address switches to the one phones were pai
     assert.ok(cf.registered.includes(paired))
   })
 })
+
+test('disconnect all phones moves the relay to a new address that nothing switches back from', async () => {
+  process.env.ORCA_CLOUDFLARE_RELAY_STATE_DIR = await mkdtemp(join(tmpdir(), 'orca-cf-state-'))
+  const old = 'O'.repeat(22)
+  await rememberHostId(WORKER, old)
+  const registrations = []
+  const fetchImpl = async (url, init = {}) => {
+    const match = /\/v1\/hosts\/([^/]+)\/register$/.exec(String(url))
+    if (match) {
+      registrations.push({ hostId: match[1], key: JSON.parse(init.body).key })
+      return new Response(JSON.stringify({ ok: true }))
+    }
+    if (String(url).startsWith(`${WORKER}/health`)) return new Response(JSON.stringify({ ok: true, service: 'orca-cloudflare-relay', version: '1.2.0', protocol: 2 }))
+    throw new Error('offline')
+  }
+  await withOffline(fetchImpl, async () => {
+    const copy = pluginCopy()
+    copy.store.set('worker-relay', { workerUrl: WORKER, hostId: old, deployedBy: 'plugin' })
+    await copy.secrets.set('relayHostKey', 'k'.repeat(43))
+    await copy.secrets.set('relayAdminToken', 'a'.repeat(43))
+    await run(copy, async () => {
+      const result = await copy.handlers.get('disconnect-all-phones')()
+      assert.equal(result.ok, true, result.error)
+    })
+    const fresh = copy.store.get('worker-relay').hostId
+    assert.notEqual(fresh, old)
+    assert.equal(await rememberedHostId(WORKER), fresh, 'other copies adopt the new address, not the old one')
+    const newKey = await copy.secrets.get('relayHostKey')
+    assert.notEqual(newKey, 'k'.repeat(43), 'a new desktop key too')
+    assert.deepEqual(registrations.find((r) => r.hostId === fresh)?.key, newKey)
+    const rekeyed = registrations.find((r) => r.hostId === old)
+    assert.ok(rekeyed && rekeyed.key !== newKey && rekeyed.key !== 'k'.repeat(43), 'the old address gets a key nobody holds')
+  })
+})

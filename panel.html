@@ -325,6 +325,25 @@
       <p class="muted" id="pair-intro">Scan in Orca Mobile (<b>Pair</b>). Paired phones appear in Orca's <b>Paired devices</b>.</p>
       <ul id="pair-list" class="phone-list hidden"></ul>
       <div class="pair-ui" id="main-pair"></div>
+      <details id="pair-remove" style="margin-top:10px">
+        <summary class="muted">Remove a phone, or lost one?</summary>
+        <ol class="guide" style="margin-top:6px">
+          <li>Open Orca's <b>Mobile</b> page (Orca's help calls it <b>Settings → Mobile</b>).</li>
+          <li>Under <b>Paired devices</b>, find the phone. Phones are named "Mobile" plus the date they paired, and <i>last seen</i> above helps tell them apart.</li>
+          <li>Remove it. Orca ends its access and closes its connections, including through this relay.</li>
+        </ol>
+        <p class="muted">The plugin can't remove a phone itself: Orca doesn't offer plugins a way to do that yet.</p>
+        <div id="disconnect-all-wrap" class="hidden" style="margin-top:8px">
+          <p><b>Can't tell which one is the lost phone?</b> <span class="muted">Cut every phone off the Cloudflare relay at once. They stay paired in Orca (for your local network) until you remove them there; the phones you keep pair again here.</span></p>
+          <div class="row" id="disconnect-ask"><button id="disconnect-all" class="danger">Disconnect all phones from the relay</button></div>
+          <div class="row hidden" id="disconnect-confirm">
+            <span class="error-text">Every phone loses the Cloudflare connection now.</span>
+            <button id="disconnect-yes" class="danger">Yes, disconnect all</button>
+            <button id="disconnect-cancel">Cancel</button>
+          </div>
+          <p id="disconnect-result" class="muted" style="margin-top:6px"></p>
+        </div>
+      </details>
     </div>
 
     <div class="card hidden" id="summary-card">
@@ -575,6 +594,20 @@
         if (wizard.open && wizard.step === 2) $('w2-progress').textContent = status.state === 'starting' ? status.message || 'Working…' : ''
       }
 
+      /* ================= Remove phones / emergency disconnect ================= */
+      $('disconnect-all').addEventListener('click', () => { show($('disconnect-ask'), false); show($('disconnect-confirm'), true); $('disconnect-result').textContent = '' })
+      $('disconnect-cancel').addEventListener('click', () => { show($('disconnect-confirm'), false); show($('disconnect-ask'), true) })
+      $('disconnect-yes').addEventListener('click', () => withButton($('disconnect-yes'), async () => {
+        const result = await request('disconnect-all-phones', undefined, 60000)
+        show($('disconnect-confirm'), false)
+        show($('disconnect-ask'), true)
+        $('disconnect-result').className = result.ok ? 'ok' : 'error-text'
+        $('disconnect-result').textContent = result.ok
+          ? '✅ Done: the relay has a new address and no phone can use the old one. Pair the phones you keep again (Pair another phone, above), and remove the lost one on Orca\'s Mobile page.'
+          : result.error
+        applySnapshot(result)
+      }))
+
       function renderSummary() {
         const settings = snap.settings || {}
         const m = settings.mode
@@ -585,6 +618,7 @@
           : m === 'custom' && snap.custom ? `${snap.custom.endpoint} · you run the tunnel/proxy`
           : m === 'quick' ? 'Random trycloudflare.com address; pair again after each restart.' : ''
         show($('remove'), Boolean(snap.named || snap.worker || snap.custom))
+        show($('disconnect-all-wrap'), m === 'worker' && Boolean(snap.worker))
         if (snap.version) $('version').textContent = snap.version
       }
 

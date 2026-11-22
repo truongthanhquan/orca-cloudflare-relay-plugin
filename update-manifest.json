@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "plugin": {
-    "latest": "2.6.3",
+    "latest": "2.6.4",
     "minimum": "2.1.0",
-    "notes": "2.6.3: the panel lists your paired phones (names and last seen) with a Pair another phone button, and explains why pairing waits when the relay isn't connected. Since 2.6.0 Orca installs plugin updates (Settings → Plugins → Update)."
+    "notes": "2.6.4: the pairing card shows how to remove a phone on Orca's Mobile page, and adds an emergency \"Disconnect all phones from the relay\" for a lost phone. Since 2.6.0 Orca installs plugin updates (Settings → Plugins → Update)."
   },
   "relay": {
     "latest": "1.2.0",

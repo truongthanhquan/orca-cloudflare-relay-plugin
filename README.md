@@ -149,8 +149,24 @@ connections too. Unused pairing codes never show up in that list.
 
 The plugin's panel shows the same phones, read-only: a **Paired phones** card with each phone's
 name and when it was last seen, plus a **Pair another phone** button. Stale phones stand out
-there. To remove one, use Orca's **Paired devices**, because Orca offers plugins no supported way
-to revoke a phone. When the relay isn't connected, the card says why the button is waiting.
+there. When the relay isn't connected, the card says why the button is waiting.
+
+**Removing a phone** happens in Orca, because Orca offers plugins no supported way to revoke one
+(no host API method and no CLI command). The card's **Remove a phone, or lost one?** section
+walks you through it:
+1. Open Orca's **Mobile** page (Orca's help calls it **Settings → Mobile**).
+2. Under **Paired devices**, find the phone ("Mobile" plus the date it paired; *last seen* in the
+   panel helps tell them apart).
+3. Remove it. Orca ends its access and closes its connections, including through this relay.
+
+**Lost a phone and can't tell which entry it is?** With the Worker relay, **Disconnect all phones
+from the relay** cuts every phone off the Cloudflare route at once:
+- **How:** it moves the relay to a new address with a new desktop key, and gives the old address a
+  key nobody holds.
+- **What remains:** phones stay paired in Orca (for your local network) until you remove them on
+  the Mobile page.
+- **Afterwards:** the phones you keep pair again from the panel.
+- **Safety:** it asks for confirmation first, and other copies of the plugin follow the new address.
 
 ### Prefer Orca's own Mobile page?
 
