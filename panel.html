@@ -36,6 +36,10 @@
       .starting .dot { background: #e0a526; }
       .error .dot { background: var(--orca-destructive, #e5484d); }
       #plugin-update-cli { user-select: all; }
+      .phone-list { list-style: none; margin: 6px 0 10px; padding: 0; border: 1px solid var(--orca-border, rgba(127,127,127,.25)); border-radius: 8px; }
+      .phone-list li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 10px; }
+      .phone-list li + li { border-top: 1px solid var(--orca-border, rgba(127,127,127,.25)); }
+      .phone-list .when { white-space: nowrap; }
       code, .mono { font-family: var(--orca-font-mono, ui-monospace, monospace); font-size: 12px; word-break: break-all; }
       label.field { display: block; margin: 10px 0 4px; font-weight: 600; }
       input[type='text'], input[type='password'], select {
@@ -317,8 +321,9 @@
     </div>
 
     <div class="card hidden" id="pair-card">
-      <h2>Pair Orca Mobile</h2>
-      <p class="muted">Scan in Orca Mobile (<b>Pair</b>). Paired phones appear in Orca's <b>Paired devices</b>.</p>
+      <h2 id="pair-title">Pair Orca Mobile</h2>
+      <p class="muted" id="pair-intro">Scan in Orca Mobile (<b>Pair</b>). Paired phones appear in Orca's <b>Paired devices</b>.</p>
+      <ul id="pair-list" class="phone-list hidden"></ul>
       <div class="pair-ui" id="main-pair"></div>
     </div>
 
@@ -345,6 +350,7 @@
       <div class="qr"></div>
       <p class="pair-security muted hidden">🔒 Works once and disappears when your phone pairs; expires in <span class="pair-expiry"></span>. Treat it like a password.</p>
       <p class="pair-done hidden">✅ <strong>Phone paired.</strong> <span class="muted">The code was used and removed. Your phone now connects through Cloudflare from anywhere.</span></p>
+      <p class="pair-hint muted hidden"></p>
       <p class="pair-error error-text"></p>
     </template>
 
@@ -375,6 +381,40 @@
 
       /* ================= Pairing widget (used in step 3 and the normal view) ================= */
       const pairUis = []
+      /** Phones Orca has paired (a count from the worker; null until known). */
+      let pairedPhones = null
+      let pairedPhoneList = []
+      function ago(ms) {
+        if (!ms) return ''
+        const s = Math.max(0, (Date.now() - ms) / 1000)
+        if (s < 90) return 'just now'
+        if (s < 3600) return `${Math.round(s / 60)} min ago`
+        if (s < 86400) return `${Math.round(s / 3600)} h ago`
+        return `${Math.round(s / 86400)} days ago`
+      }
+      const pairLabel = () => (pairedPhones > 0 ? 'Pair another phone' : 'Show pairing QR code')
+      function renderPairIntro() {
+        const n = pairedPhones || 0
+        $('pair-title').textContent = n > 0 ? 'Paired phones' : 'Pair Orca Mobile'
+        $('pair-intro').innerHTML = n > 0
+          ? `<b>${n} ${n === 1 ? 'phone is' : 'phones are'} paired</b> with this Orca. Add another one any time. To remove a phone you no longer use, revoke it under <b>Paired devices</b> on Orca's <b>Mobile</b> page.`
+          : 'Scan the code in Orca Mobile (<b>Pair</b>). Paired phones appear in Orca\'s <b>Paired devices</b>, and you can pair as many as you like.'
+        const list = $('pair-list')
+        list.textContent = ''
+        for (const phone of pairedPhoneList) {
+          const li = document.createElement('li')
+          const name = document.createElement('span')
+          name.textContent = phone.name
+          const when = document.createElement('span')
+          when.className = 'muted when'
+          when.textContent = `last seen ${ago(phone.lastSeenAt)}`
+          when.title = phone.pairedAt ? `Paired ${new Date(phone.pairedAt).toLocaleString()}` : ''
+          li.append(name, when)
+          list.appendChild(li)
+        }
+        show(list, pairedPhoneList.length > 0)
+        pairUis.forEach((ui) => ui.relabel())
+      }
       function makePairUi(root) {
         root.appendChild($('pair-template').content.cloneNode(true))
         const q = (sel) => root.querySelector(sel)
@@ -386,7 +426,7 @@
             q('.qr').innerHTML = ''
             show(q('.pair-security'), false)
             show(q('.pair-hide'), false)
-            q('.pair-show').textContent = 'Show pairing QR code'
+            q('.pair-show').textContent = pairLabel()
             q('.pair-error').textContent = reason ? `Code invalidated: ${reason}.` : ''
           },
           showing: () => q('.qr').innerHTML !== '',
@@ -395,7 +435,13 @@
             show(q('.pair-done'), true)
             q('.pair-show').textContent = 'Pair another phone'
           },
-          setEnabled(enabled) { q('.pair-show').disabled = !enabled }
+          relabel() { if (!ui.showing()) q('.pair-show').textContent = pairLabel() },
+          /** Disabled with a reason, so a greyed-out button never leaves the person guessing. */
+          setEnabled(enabled, why = '') {
+            q('.pair-show').disabled = !enabled
+            q('.pair-hint').textContent = enabled ? '' : why
+            show(q('.pair-hint'), !enabled && Boolean(why))
+          }
         }
         q('.pair-show').addEventListener('click', () => withButton(q('.pair-show'), async () => {
           q('.pair-error').textContent = ''
@@ -427,7 +473,12 @@
       makePairUi($('main-pair'))
       orca.plugin.on('pairing-invalidated', (payload) => pairUis.forEach((ui) => ui.clear(payload && payload.reason)))
       // Only the widget that showed the code says "paired"; the other just drops any stale code.
-      orca.plugin.on('pairing-complete', () => pairUis.forEach((ui) => (ui.showing() ? ui.paired() : ui.clear())))
+      orca.plugin.on('pairing-complete', (payload) => {
+        pairedPhones = payload && typeof payload.pairedPhones === 'number' ? payload.pairedPhones : (pairedPhones || 0) + 1
+        if (payload && Array.isArray(payload.pairedPhoneList)) pairedPhoneList = payload.pairedPhoneList
+        pairUis.forEach((ui) => (ui.showing() ? ui.paired() : ui.clear()))
+        renderPairIntro()
+      })
 
       /* ================= Rendering ================= */
       function render() {
@@ -491,7 +542,14 @@
         const status = current || {}
         show($('w3-connected'), step === 3)
         $('w3-endpoint').textContent = status.endpoint || ''
-        pairUis[0].setEnabled(step === 3 && status.state === 'connected')
+        pairUis[0].setEnabled(step === 3 && status.state === 'connected', pairWhy(status))
+      }
+
+      /** Why pairing has to wait, in the person's terms. */
+      function pairWhy(status) {
+        if (status.state === 'starting') return 'Waiting for the relay to connect. The button turns on by itself.'
+        if (status.state === 'error') return 'The relay has a problem (see above). Fix it, then pair.'
+        return 'Turn the relay on (Start, above) to pair a phone.'
       }
 
       function renderStatus() {
@@ -511,7 +569,7 @@
         const needsSetup = status.state === 'error' && status.needsSetup
         show($('fix'), needsSetup && !wizard.open)
         $('status-card').classList.toggle('attention', needsSetup)
-        pairUis[1].setEnabled(status.state === 'connected')
+        pairUis[1].setEnabled(status.state === 'connected', pairWhy(status))
         if (status.state !== 'connected') pairUis.forEach((ui) => ui.clear())
         // While a setup step runs, its progress shows right under the button.
         if (wizard.open && wizard.step === 2) $('w2-progress').textContent = status.state === 'starting' ? status.message || 'Working…' : ''
@@ -545,6 +603,11 @@
           $('relay-fallback').checked = settings.relayFallback === true
         }
         if (next.updates) renderUpdates(next.updates)
+        if (typeof next.pairedPhones === 'number') {
+          pairedPhones = next.pairedPhones
+          pairedPhoneList = Array.isArray(next.pairedPhoneList) ? next.pairedPhoneList : []
+          renderPairIntro()
+        }
         renderAbout(snap.about)
         render()
       }

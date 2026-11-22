@@ -147,6 +147,11 @@ in Orca's device registry like a LAN phone. It appears under **Paired devices** 
 connected, as "Mobile <date>", and can be renamed or revoked there. Revoking ends its relay
 connections too. Unused pairing codes never show up in that list.
 
+The plugin's panel shows the same phones, read-only: a **Paired phones** card with each phone's
+name and when it was last seen, plus a **Pair another phone** button. Stale phones stand out
+there. To remove one, use Orca's **Paired devices**, because Orca offers plugins no supported way
+to revoke a phone. When the relay isn't connected, the card says why the button is waiting.
+
 ### Prefer Orca's own Mobile page?
 
 Once connected, you can also generate the QR code from Orca's built-in **Mobile** page. Choose a
@@ -308,7 +313,8 @@ plugin author: the relay runs in your own Cloudflare account.
   or another copy of the plugin keeps the address paired phones use. Nothing secret: the host id
   is already in every pairing code. The file is readable only by you.
 - **Read-only:** Orca's `orca-runtime.json` (to find Orca's port) and `orca-devices.json` (to
-  notice that a phone used the code on screen, so the code can be removed). The plugin never
+  notice that a phone used the code on screen, so the code can be removed, and to list paired
+  phones in the panel: names and dates only, never tokens or device ids). The plugin never
   writes to Orca's files, and pairing secrets are never logged or sent to the panel.
 
 **Removing it:** **Remove setup** deletes what it created in Cloudflare (when it still has a

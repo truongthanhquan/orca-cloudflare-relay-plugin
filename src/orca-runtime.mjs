@@ -233,6 +233,27 @@ export async function readDeviceRegistry({ userDataDir = orcaUserDataDir() } = {
  * Finds the registry row behind a pairing code and reports once a phone has signed in with it,
  * so the code can leave the screen immediately. Returns only non-secret fields.
  */
+/**
+ * How many phones Orca has paired: used device rows (signed in at least once) with the mobile
+ * scope. Other Orca desktops paired with this one are not counted. Only the number leaves here.
+ */
+export function countPairedPhones(rows) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => (row?.scope ?? 'mobile') === 'mobile' && Number(row?.lastSeenAt) > 0).length
+}
+
+/**
+ * The paired phones for display, newest activity first: name and dates only (never the token,
+ * device id or anything else from Orca's registry). At most 20.
+ */
+export function pairedPhoneList(rows) {
+  const time = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null)
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => (row?.scope ?? 'mobile') === 'mobile' && Number(row?.lastSeenAt) > 0)
+    .map((row) => ({ name: typeof row.name === 'string' ? row.name.slice(0, 80) : 'Phone', pairedAt: time(row.pairedAt), lastSeenAt: time(row.lastSeenAt) }))
+    .sort((a, b) => (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0))
+    .slice(0, 20)
+}
+
 export function pairingRowFor(rows, { deviceToken, deviceId } = {}) {
   const row = rows.find((item) => (deviceId ? item?.deviceId === deviceId : deviceToken && item?.token === deviceToken))
   if (!row || typeof row.deviceId !== 'string') return null

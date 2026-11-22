@@ -12,6 +12,8 @@ import { CustomEndpoint, normalizeCustomEndpoint } from './custom-endpoint.mjs'
 import { ensureCloudflared } from './cloudflared-binary.mjs'
 import { readFileSync } from 'node:fs'
 import {
+  countPairedPhones,
+  pairedPhoneList,
   createMobilePairingOffer,
   findOrcaCli,
   findOrcaWebSocketPort,
@@ -340,6 +342,12 @@ export default function activate(orca) {
     await invalidatePairingCode('the relay stopped')
   }
 
+  /** Paired phones for the panel: the count and names/dates only (no tokens or device ids). */
+  async function pairedPhonesView() {
+    const rows = await readDeviceRegistry().catch(() => [])
+    return { pairedPhones: countPairedPhones(rows), pairedPhoneList: pairedPhoneList(rows) }
+  }
+
   async function snapshot() {
     const config = await settings()
     const named = await orca.storage.get(KEYS.named)
@@ -357,6 +365,7 @@ export default function activate(orca) {
       orcaCliFound: Boolean(findOrcaCli({ override: config.orcaCliPath || undefined })),
       links: { createToken: TOKEN_TEMPLATE_URL, createTunnelToken: TUNNEL_TOKEN_TEMPLATE_URL, deployButton: DEPLOY_BUTTON_URL },
       updates: updatesView(),
+      ...(await pairedPhonesView()),
       version: PLUGIN_VERSION,
       about: aboutInfo()
     }
@@ -634,7 +643,7 @@ export default function activate(orca) {
       stopWatchingCode()
       shownCode = null
       log('A phone paired through Cloudflare Relay; the pairing code was removed from the screen.')
-      orca.panels.post('pairing-complete', { name: row.name })
+      orca.panels.post('pairing-complete', await pairedPhonesView())
     }, PAIRING_WATCH_INTERVAL_MS)
     code.watch.unref?.()
   }

@@ -74,3 +74,20 @@ test('registration explains a Deploy-button Worker that belongs to another deskt
     /already belongs to another Orca desktop/
   )
 })
+
+test('the paired phone list shows names and dates only, never tokens or device ids', async () => {
+  const { countPairedPhones, pairedPhoneList } = await import('../src/orca-runtime.mjs')
+  const rows = [
+    { deviceId: 'd1', token: 'secret-1', name: 'Old phone', scope: 'mobile', pairedAt: 1, lastSeenAt: 10 },
+    { deviceId: 'd2', token: 'secret-2', name: 'New phone', scope: 'mobile', pairedAt: 2, lastSeenAt: 20 },
+    { deviceId: 'd3', token: 'secret-3', name: 'Unused code', scope: 'mobile', lastSeenAt: 0 },
+    { deviceId: 'd4', token: 'secret-4', name: 'Laptop Orca', scope: 'runtime', lastSeenAt: 30 }
+  ]
+  assert.equal(countPairedPhones(rows), 2)
+  const list = pairedPhoneList(rows)
+  assert.deepEqual(list, [
+    { name: 'New phone', pairedAt: 2, lastSeenAt: 20 },
+    { name: 'Old phone', pairedAt: 1, lastSeenAt: 10 }
+  ])
+  assert.doesNotMatch(JSON.stringify(list), /secret|d1|d2/)
+})

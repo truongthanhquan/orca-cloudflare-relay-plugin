@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "plugin": {
-    "latest": "2.6.2",
+    "latest": "2.6.3",
     "minimum": "2.1.0",
-    "notes": "2.6.2: finds the Orca CLI on Windows even when Orca hides USERPROFILE from plugins. 2.6.1: phones stay paired through plugin updates, relay redeploys and reinstalls; one-click Update now; security updates turn the relay off until installed. Since 2.6.0 Orca installs plugin updates (Settings → Plugins → Update); coming from 2.5.x, Orca asks you once to review it."
+    "notes": "2.6.3: the panel lists your paired phones (names and last seen) with a Pair another phone button, and explains why pairing waits when the relay isn't connected. Since 2.6.0 Orca installs plugin updates (Settings → Plugins → Update)."
   },
   "relay": {
     "latest": "1.2.0",
