@@ -3,115 +3,733 @@
   <head>
     <meta charset="utf-8" />
     <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
       body {
         margin: 0;
         padding: 12px;
-        font-family: system-ui, sans-serif;
+        font: 13px/1.45 var(--orca-font-sans, system-ui, sans-serif);
         color: var(--orca-foreground, #ddd);
         background: var(--orca-background, transparent);
       }
+      h1 { font-size: 15px; margin: 0 0 2px; }
+      h2 { font-size: 13px; margin: 0 0 8px; }
+      p { margin: 0 0 8px; }
+      .muted { color: var(--orca-muted-foreground, #999); }
+      .card {
+        border: 1px solid var(--orca-border, #444);
+        border-radius: var(--orca-radius, 8px);
+        background: var(--orca-card, transparent);
+        padding: 12px;
+        margin: 12px 0;
+      }
+      .card.attention { border-color: var(--orca-destructive, #e5484d); }
+      .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .spread { justify-content: space-between; }
+      .badge {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 2px 8px; border-radius: 999px; font-weight: 600; font-size: 12px;
+        background: var(--orca-muted, #333);
+      }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #888; }
+      .connected .dot { background: #2fb36d; }
+      .starting .dot { background: #e0a526; }
+      .error .dot { background: var(--orca-destructive, #e5484d); }
+      code, .mono { font-family: var(--orca-font-mono, ui-monospace, monospace); font-size: 12px; word-break: break-all; }
+      label.field { display: block; margin: 10px 0 4px; font-weight: 600; }
+      input[type='text'], input[type='password'], select {
+        width: 100%; padding: 7px 8px;
+        border: 1px solid var(--orca-input, #555); border-radius: 6px;
+        background: var(--orca-background, #111); color: inherit; font: inherit;
+      }
       button {
-        margin: 6px 6px 6px 0;
-        padding: 6px 10px;
+        padding: 6px 12px; border-radius: 6px; cursor: pointer; font: inherit;
         border: 1px solid var(--orca-border, #555);
-        border-radius: 6px;
-        background: var(--orca-secondary, #2a2a2a);
-        color: var(--orca-foreground, #ddd);
-        cursor: pointer;
+        background: var(--orca-secondary, #2a2a2a); color: var(--orca-secondary-foreground, inherit);
       }
-      label { display: block; margin-top: 10px; font-weight: 600; }
-      input {
-        width: min(600px, 100%);
-        box-sizing: border-box;
-        margin-top: 4px;
-        padding: 8px;
-        border: 1px solid var(--orca-border, #555);
-        border-radius: 6px;
-        background: var(--orca-background, #111);
-        color: var(--orca-foreground, #ddd);
+      button.primary { background: var(--orca-primary, #3b82f6); color: var(--orca-primary-foreground, #fff); border-color: transparent; }
+      button.link { border: none; background: none; padding: 0; color: var(--orca-primary, #3b82f6); text-decoration: underline; }
+      button.danger { color: var(--orca-destructive, #e5484d); }
+      button:disabled { opacity: 0.55; cursor: default; }
+      details > summary { cursor: pointer; }
+      .ok { color: #2fb36d; font-weight: 600; }
+      .error-text { color: var(--orca-destructive, #e5484d); white-space: pre-wrap; }
+      .hidden { display: none !important; }
+      .qr { width: min(240px, 100%); margin: 8px 0; }
+      .qr svg { width: 100%; height: auto; display: block; border-radius: 6px; }
+
+      /* Setup steps: all visible, the current one highlighted */
+      .num {
+        flex: none; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+        font-size: 11px; font-weight: 700; background: var(--orca-muted, #333); color: var(--orca-muted-foreground, #aaa);
       }
-      #status { min-height: 1.4em; white-space: pre-wrap; }
+      .wstep { position: relative; margin-left: 9px; padding: 0 0 14px 14px; border-left: 2px solid var(--orca-border, #444); min-width: 0; }
+      .wstep:last-child { border-left-color: transparent; padding-bottom: 0; }
+      .whead { display: flex; align-items: center; gap: 8px; margin-left: -25px; margin-bottom: 6px; }
+      .whead b { font-size: 13px; }
+      .wstate { margin-left: auto; font-size: 11px; }
+      .wstep.current .num { background: var(--orca-primary, #3b82f6); color: var(--orca-primary-foreground, #fff); box-shadow: 0 0 0 3px color-mix(in srgb, var(--orca-primary, #3b82f6) 30%, transparent); }
+      .wstep.current .wbody { border: 1px solid var(--orca-primary, #3b82f6); border-radius: 8px; padding: 8px; background: color-mix(in srgb, var(--orca-primary, #3b82f6) 6%, transparent); }
+      .wstep.done .num { background: #2fb36d; color: #fff; }
+      .wstep.done { border-left-color: #2fb36d; }
+      .wstep.upcoming .whead b { color: var(--orca-muted-foreground, #999); }
+      .wstep.upcoming .wbody { opacity: 0.5; pointer-events: none; }
+
+      /* Choices */
+      .choice {
+        display: flex; gap: 8px; align-items: flex-start; padding: 8px; margin: 6px 0;
+        border: 1px solid var(--orca-border, #444); border-radius: 6px; cursor: pointer;
+      }
+      .choice:has(input:checked) { border-color: var(--orca-primary, #3b82f6); }
+      .choice input { margin-top: 3px; }
+      .choice strong { display: block; }
+
+      /* Guide lists */
+      .guide { margin: 0 0 8px; padding-left: 18px; }
+      .guide li { margin: 3px 0; }
+      .progress { margin-top: 8px; min-height: 1.2em; }
+      .callout { border-left: 3px solid #2fb36d; padding: 6px 10px; margin: 0 0 10px; background: var(--orca-muted, rgba(127,127,127,.12)); border-radius: 4px; }
+
+      /* The setup steps are the page's main content: no extra card frame around them. */
+      #wizard { border: none; background: none; padding: 0; margin-top: 10px; }
+      .choice { padding: 7px 8px; }
+      .choice .muted { font-size: 12px; }
+      /* Guide actions sit on their own line instead of breaking the sentence. */
+      .guide .action { display: block; margin: 4px 0 2px; }
+      .guide { padding-left: 16px; }
+      input, select, button { max-width: 100%; }
+
+      .seg { display: flex; border: 1px solid var(--orca-border, #555); border-radius: 6px; overflow: hidden; margin: 0 0 10px; }
+      .seg button { flex: 1; border: none; border-radius: 0; padding: 5px 6px; font-size: 12px; background: transparent; }
+      .seg button.on { background: var(--orca-primary, #3b82f6); color: var(--orca-primary-foreground, #fff); }
+      .hint { font-size: 12px; }
+      code.inline { background: var(--orca-muted, rgba(127,127,127,.15)); padding: 0 4px; border-radius: 4px; }
+
+      /* Narrow sidebars */
+      @media (max-width: 320px) {
+        body { padding: 10px 8px; }
+        .card { padding: 10px; }
+        #tagline { font-size: 12px; }
+        .wstep { padding-left: 12px; }
+        .whead { margin-left: -23px; }
+        .wstep.current .wbody { padding: 7px; }
+        .wbody button.primary, .guide .action, .pair-show { width: 100%; }
+        .row.spread { flex-direction: column; align-items: stretch; }
+        .row.spread > button:not(.link) { width: 100%; }
+        .row.spread > button.link { align-self: flex-start; }
+        .stack-narrow { display: none; }
+      }
+
+      footer { margin: 16px 0 4px; font-size: 11px; color: var(--orca-muted-foreground, #999); text-align: center; }
+      footer a { color: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+      footer a:hover { color: var(--orca-foreground, #ddd); }
     </style>
   </head>
   <body>
-    <h1>Cloudflare Relay Setup</h1>
-    <p>Enter a Cloudflare API token and one public relay hostname. Orca will discover the account and zone and generate one self-hosted Worker origin using Cloudflare Durable Object storage.</p>
-    <label>Cloudflare API token</label>
-    <input id="api-token" type="password" placeholder="Create a scoped API token in Cloudflare" />
-    <label>Relay director hostname</label>
-    <input id="relay-domain" placeholder="relay.example.com" />
-    <button id="generate">Generate config</button>
-    <button id="download">Download .jsonc</button>
-    <button id="auto">Auto-discover account and zone</button>
-    <p id="status"></p>
+    <h1>Cloudflare Relay</h1>
+    <p class="muted" id="tagline">Connect Orca Mobile to this computer from anywhere, through Cloudflare.</p>
+
+    <!-- Updates (only when something is available or failed) -->
+    <div class="card hidden" id="updates-card">
+      <h2 id="updates-title">Update available</h2>
+      <div id="plugin-update" class="hidden">
+        <p><b>Plugin</b> <span id="plugin-update-versions" class="mono"></span> <span id="plugin-required" class="badge error hidden"><span class="dot"></span>Required</span></p>
+        <p id="plugin-update-notes" class="muted"></p>
+        <div class="row"><button id="update-plugin" class="primary">Update plugin</button></div>
+        <p id="plugin-update-message" class="muted" style="margin-top:6px"></p>
+      </div>
+      <div id="relay-update" class="hidden" style="margin-top:10px">
+        <p><b>Relay Worker</b> <span id="relay-update-versions" class="mono"></span> <span id="relay-required" class="badge error hidden"><span class="dot"></span>Required</span></p>
+        <p id="relay-update-notes" class="muted"></p>
+        <div id="relay-token" class="hidden">
+          <p class="muted">Updating redeploys the relay in your Cloudflare account; your phones stay paired. It needs a token:</p>
+          <div class="row"><button id="relay-create-token">Create token in Cloudflare</button></div>
+          <input id="relay-api-token" type="password" placeholder="Paste the Cloudflare API token" autocomplete="off" style="margin-top:6px" />
+        </div>
+        <div class="row" style="margin-top:6px"><button id="update-relay" class="primary">Update relay</button></div>
+        <p id="relay-update-message" class="muted" style="margin-top:6px"></p>
+      </div>
+    </div>
+
+    <!-- ===================== Setup wizard ===================== -->
+    <div class="card hidden" id="wizard">
+      <div class="row spread" style="margin-bottom:10px">
+        <h2 style="margin:0" id="wizard-title">Set up in 3 steps</h2>
+        <button class="link hidden" id="wizard-cancel">Cancel</button>
+      </div>
+
+      <!-- Step 1 -->
+      <section id="w1" class="wstep">
+        <div class="whead"><span class="num">1</span><b>Choose a connection</b><span class="wstate muted" id="w1-state"></span></div>
+        <div class="wbody">
+        <label class="choice"><input type="radio" name="mode" value="worker" />
+          <span><strong>Worker relay <span class="muted">· recommended</span></strong><span class="muted">Free account · stable address · stays paired</span></span>
+        </label>
+        <label class="choice"><input type="radio" name="mode" value="named" />
+          <span><strong>Tunnel on your domain</strong><span class="muted">Needs a domain on Cloudflare.</span></span>
+        </label>
+        <label class="choice"><input type="radio" name="mode" value="quick" />
+          <span><strong>Quick tunnel</strong><span class="muted">No account · address changes on restart</span></span>
+        </label>
+        <label class="choice"><input type="radio" name="mode" value="custom" />
+          <span><strong>Your own address <span class="muted">· advanced</span></strong><span class="muted">You run the tunnel or proxy; the plugin just pairs</span></span>
+        </label>
+        <details style="margin-top:6px">
+          <summary class="muted">More options</summary>
+          <label class="choice" style="margin-top:6px"><input type="checkbox" id="relay-fallback" />
+            <span><strong>Also offer Orca Relay</strong><span class="muted">Fallback in the QR code (needs Orca sign-in).</span></span>
+          </label>
+        </details>
+        <div class="row" style="margin-top:8px" id="w1-actions"><button id="w1-next" class="primary">Continue</button></div>
+        </div>
+      </section>
+
+      <!-- Step 2 -->
+      <section id="w2" class="wstep">
+        <div class="whead"><span class="num">2</span><b id="w2-title">Connect Cloudflare</b><span class="wstate muted" id="w2-state"></span></div>
+        <div class="wbody">
+        <div class="seg" id="setup-style">
+          <button id="style-auto" class="on">Automatic · token</button>
+          <button id="style-manual">Manual · no token</button>
+        </div>
+        <!-- Worker relay -->
+        <div id="w2-worker">
+          <div id="worker-auto">
+          <div id="token-saved" class="hidden">
+            <p><span class="ok">✓</span> <span id="token-saved-text">Using your saved token.</span> <button class="link" id="token-change">Use another</button></p>
+          </div>
+          <div id="token-entry">
+            <ol class="guide">
+              <li>Sign in to Cloudflare. <span class="muted">No account? <a href="#" id="signup-link">Create one free</a>.</span>
+                <button id="create-token" class="action">Open Cloudflare</button></li>
+              <li>Click <b>Continue to summary</b> → <b>Create Token</b>, then copy it. <span class="muted">Permission is pre-filled.</span></li>
+              <li>Paste it here:</li>
+            </ol>
+            <input id="api-token" type="password" placeholder="Cloudflare API token" autocomplete="off" />
+            <p id="token-check" class="muted" style="margin-top:6px"></p>
+          </div>
+          <div id="account-choice" class="hidden">
+            <label class="field" for="account-select">Which account should host the relay?</label>
+            <select id="account-select"></select>
+          </div>
+          <div id="worker-name-field" class="hidden">
+            <label class="field" for="worker-name">Name for the relay Worker</label>
+            <input id="worker-name" type="text" autocomplete="off" />
+            <p class="muted" style="margin-top:6px">Your existing Worker is left untouched.</p>
+          </div>
+          </div>
+          <div id="worker-manual" class="hidden">
+            <p class="muted hint">Deploy the relay yourself; the plugin never sees your Cloudflare credentials.</p>
+            <ol class="guide">
+              <li>Deploy the <code class="inline">worker/</code> folder: <button id="deploy-button" class="action">Deploy to Cloudflare</button><span class="muted hint">or run <code class="inline">npx wrangler deploy</code> in that folder.</span></li>
+              <li>Paste the Worker's URL:</li>
+            </ol>
+            <input id="worker-url" type="text" placeholder="https://orca-relay.you.workers.dev" autocomplete="off" />
+            <p class="muted hint" style="margin-top:6px">This desktop registers itself with the new relay. Add a <code class="inline">RELAY_ADMIN_TOKEN</code> secret to the Worker if you want to restrict registration.</p>
+          </div>
+        </div>
+
+        <!-- Tunnel on your domain -->
+        <div id="w2-named" class="hidden">
+          <label class="field" for="hostname">Public hostname</label>
+          <input id="hostname" type="text" placeholder="orca.example.com" autocomplete="off" />
+          <div id="named-auto">
+          <div id="named-token-entry">
+            <ol class="guide" style="margin-top:10px">
+              <li>Sign in to Cloudflare. <button id="open-tokens" class="action">Create token in Cloudflare</button></li>
+              <li>Check the summary lists <b>Cloudflare Tunnel · Edit</b>, <b>DNS · Edit</b> and <b>Zone · Read</b> (add any that are missing), then <b>Create Token</b> and copy it.</li>
+              <li>Paste it here:</li>
+            </ol>
+            <input id="named-api-token" type="password" placeholder="Cloudflare API token" autocomplete="off" />
+          </div>
+          <p id="named-token-saved" class="hidden"><span class="ok">✓</span> Using your saved token.</p>
+          </div>
+          <div id="named-manual" class="hidden">
+            <ol class="guide" style="margin-top:10px">
+              <li>In Cloudflare, create a tunnel: <button id="open-tunnels" class="action">Open Cloudflare Tunnels</button><span class="muted hint">Networks → Tunnels → Create a tunnel → Cloudflared.</span></li>
+              <li>Add a <b>public hostname</b>: the hostname above, service <b>HTTP</b> → <code class="inline" id="manual-service">127.0.0.1:6768</code>.</li>
+              <li>Copy the install command (or just its token) and paste it here:</li>
+            </ol>
+            <input id="tunnel-token" type="password" placeholder="cloudflared service install eyJh…" autocomplete="off" />
+            <p class="muted hint" style="margin-top:6px">The plugin runs <code class="inline">cloudflared</code> with this tunnel token only; it never gets API access to your account.</p>
+          </div>
+        </div>
+
+        <!-- Your own address -->
+        <div id="w2-custom" class="hidden">
+          <label class="field" for="custom-endpoint">Public address of your tunnel or proxy</label>
+          <input id="custom-endpoint" type="text" placeholder="wss://orca.example.com" autocomplete="off" />
+          <p class="muted hint" style="margin-top:6px">Point your own tunnel or reverse proxy (for example a <code class="inline">cloudflared</code> service you manage) at <code class="inline" id="custom-service">http://127.0.0.1:6768</code> with TLS. The plugin checks that it reaches this Orca and uses it in the pairing QR code.</p>
+        </div>
+
+        <!-- Quick tunnel -->
+        <div id="w2-quick" class="hidden">
+          <p class="muted">Quick tunnels need no account. Remember: the address changes whenever the tunnel restarts, so you pair again.</p>
+        </div>
+
+        <p id="w2-progress" class="muted progress"></p>
+        <p id="w2-error" class="error-text"></p>
+        <div class="row" style="margin-top:6px">
+          <button id="w2-go" class="primary">Deploy relay</button>
+        </div>
+        </div>
+      </section>
+
+      <!-- Step 3 -->
+      <section id="w3" class="wstep">
+        <div class="whead"><span class="num">3</span><b>Pair your phone</b><span class="wstate muted" id="w3-state"></span></div>
+        <div class="wbody">
+        <div class="callout hidden" id="w3-connected"><b>✓ Connected.</b> <span class="muted mono" id="w3-endpoint"></span></div>
+        <ol class="guide">
+          <li>Click <b>Show pairing QR code</b>.</li>
+          <li>In Orca Mobile, tap <b>Pair</b> and scan it.</li>
+        </ol>
+        <div class="pair-ui" id="w3-pair"></div>
+        <div class="row spread" style="margin-top:6px">
+          <span class="muted stack-narrow">Pair more phones any time.</span>
+          <button id="w3-done" class="primary">Done</button>
+        </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===================== Normal view (after setup) ===================== -->
+    <div class="card hidden" id="status-card">
+      <div class="row">
+        <span id="badge" class="badge"><span class="dot"></span><span id="state">Loading…</span></span>
+        <span id="endpoint" class="mono"></span>
+      </div>
+      <p id="message" class="muted" style="margin-top:8px"></p>
+      <div class="row">
+        <button id="start" class="primary">Start</button>
+        <button id="stop">Stop</button>
+        <button id="fix" class="primary hidden">Fix setup</button>
+      </div>
+    </div>
+
+    <div class="card hidden" id="pair-card">
+      <h2>Pair Orca Mobile</h2>
+      <p class="muted">Scan in Orca Mobile (<b>Pair</b>). Paired phones appear in Orca's <b>Paired devices</b>.</p>
+      <div class="pair-ui" id="main-pair"></div>
+    </div>
+
+    <div class="card hidden" id="summary-card">
+      <div class="row spread">
+        <span><span class="ok">✓</span> <b id="summary-text"></b></span>
+        <button class="link" id="change-setup">Change setup</button>
+      </div>
+      <p class="muted" id="summary-detail" style="margin:4px 0 6px"></p>
+      <p class="muted" style="margin:0">Version <span id="version"></span> · <span id="update-check-text">Checking for updates…</span> <button class="link" id="check-updates">Check now</button></p>
+      <div class="row" style="margin-top:8px"><button id="remove" class="danger">Remove setup</button></div>
+      <p id="summary-error" class="error-text" style="margin-top:6px"></p>
+    </div>
+
+    <footer id="about" class="hidden">
+      <span id="about-name"></span> v<span id="about-version"></span><span id="about-author-wrap"> · by <a id="about-author" href="#"></a></span><span id="about-source-wrap"> · <a id="about-source" href="#">Source</a></span><span id="about-issues-wrap"> · <a id="about-issues" href="#">Report an issue</a></span>
+    </footer>
+
+    <template id="pair-template">
+      <div class="row">
+        <button class="primary pair-show">Show pairing QR code</button>
+        <button class="pair-hide hidden">Hide and invalidate</button>
+      </div>
+      <div class="qr"></div>
+      <p class="pair-security muted hidden">🔒 Works once, expires in <span class="pair-expiry"></span>. Treat it like a password.</p>
+      <p class="pair-error error-text"></p>
+    </template>
+
     <script>
-      const status = document.getElementById('status')
-      async function saveCredentials() {
-        const apiToken = document.getElementById('api-token').value.trim()
-        if (!apiToken) {
-          return { ok: false, error: 'Cloudflare API token is required.' }
-        }
-        try {
-          return await orca.host.call('plugin.request', {
-            name: 'save-secrets',
-            input: { apiToken }
-          }).then((result) => result.output)
-        } catch (error) {
-          return { ok: false, error: `${error.code}: ${error.message}` }
-        }
+      const $ = (id) => document.getElementById(id)
+      const show = (el, visible) => el.classList.toggle('hidden', !visible)
+      const labels = { stopped: 'Off', starting: 'Connecting', connected: 'Connected', error: 'Error' }
+      const modeNames = { worker: 'Worker relay', named: 'Tunnel on your domain', quick: 'Quick tunnel', custom: 'Your own address' }
+      let snap = {}
+      let current = null
+      let links = {}
+      let tokenState = { checked: false, valid: false }
+      let forceTokenEntry = false
+      /** Wizard: open while setting up or changing setup; step 1..3. */
+      const wizard = { open: false, step: 1, changing: false, manual: false }
+
+      function request(name, input, timeoutMs = 120000) {
+        return orca.plugin.request(name, input, { timeoutMs }).catch((error) => ({
+          ok: false,
+          error: (error && error.message) || String(error)
+        }))
       }
-      document.getElementById('auto').addEventListener('click', async () => {
-        const saved = await saveCredentials()
-        if (!saved.ok) {
-          status.textContent = saved.error
+      const selectedMode = () => (document.querySelector('input[name="mode"]:checked') || {}).value || 'worker'
+      async function withButton(button, task) {
+        button.disabled = true
+        try { await task() } finally { button.disabled = false; render() }
+      }
+
+      /* ================= Pairing widget (used in step 3 and the normal view) ================= */
+      const pairUis = []
+      function makePairUi(root) {
+        root.appendChild($('pair-template').content.cloneNode(true))
+        const q = (sel) => root.querySelector(sel)
+        let timer = null
+        const ui = {
+          clear(reason) {
+            clearInterval(timer)
+            q('.qr').innerHTML = ''
+            show(q('.pair-security'), false)
+            show(q('.pair-hide'), false)
+            q('.pair-show').textContent = 'Show pairing QR code'
+            q('.pair-error').textContent = reason ? `Code invalidated: ${reason}.` : ''
+          },
+          setEnabled(enabled) { q('.pair-show').disabled = !enabled }
+        }
+        q('.pair-show').addEventListener('click', () => withButton(q('.pair-show'), async () => {
+          q('.pair-error').textContent = ''
+          const result = await request('pair')
+          if (!result.ok) { q('.pair-error').textContent = result.error; return }
+          for (const other of pairUis) if (other !== ui) other.clear()
+          q('.qr').innerHTML = result.svg
+          show(q('.pair-security'), true)
+          show(q('.pair-hide'), true)
+          q('.pair-show').textContent = 'Show a new code'
+          clearInterval(timer)
+          const tick = () => {
+            const left = Math.max(0, result.expiresAt - Date.now())
+            q('.pair-expiry').textContent = `${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, '0')}`
+            if (left <= 0) ui.clear('it expired')
+          }
+          tick()
+          timer = setInterval(tick, 1000)
+        }))
+        q('.pair-hide').addEventListener('click', () => withButton(q('.pair-hide'), async () => {
+          ui.clear('you hid it')
+          await request('invalidate-pairing')
+        }))
+        pairUis.push(ui)
+        return ui
+      }
+      makePairUi($('w3-pair'))
+      makePairUi($('main-pair'))
+      orca.plugin.on('pairing-invalidated', (payload) => pairUis.forEach((ui) => ui.clear(payload && payload.reason)))
+
+      /* ================= Rendering ================= */
+      function render() {
+        const configured = snap.configured === true
+        if (!configured && snap.configured === false && !wizard.open) Object.assign(wizard, { open: true, step: 1, changing: false })
+        const inWizard = wizard.open
+        show($('tagline'), !configured || inWizard)
+        show($('wizard'), inWizard)
+        show($('status-card'), configured && !(inWizard && wizard.step === 3))
+        show($('pair-card'), configured && !inWizard)
+        show($('summary-card'), configured && !inWizard)
+        renderWizard()
+        renderStatus()
+        renderSummary()
+      }
+
+      function renderWizard() {
+        if (!wizard.open) return
+        const step = wizard.step
+        // Every step stays visible: done ones keep their options editable, later ones are dimmed.
+        ;['w1', 'w2', 'w3'].forEach((id, i) => {
+          $(id).className = `wstep ${i + 1 < step ? 'done' : i + 1 === step ? 'current' : 'upcoming'}`
+        })
+        $('w1-state').textContent = ''
+        $('w2-state').textContent = step > 2 ? 'connected' : ''
+        $('w3-state').textContent = ''
+        show($('w1-actions'), step === 1)
+        show($('wizard-cancel'), wizard.changing && step < 3)
+        $('wizard-title').textContent = wizard.changing ? 'Change setup' : 'Set up in 3 steps'
+
+        const mode = selectedMode()
+        show($('w2-worker'), mode === 'worker')
+        show($('w2-named'), mode === 'named')
+        show($('w2-quick'), mode === 'quick')
+        show($('w2-custom'), mode === 'custom')
+        // Automatic (the plugin uses a token) or manual (the person does it in Cloudflare).
+        const hasStyles = mode === 'worker' || mode === 'named'
+        show($('setup-style'), hasStyles)
+        $('style-auto').classList.toggle('on', !wizard.manual)
+        $('style-manual').classList.toggle('on', wizard.manual)
+        show($('worker-auto'), !wizard.manual)
+        show($('worker-manual'), wizard.manual)
+        show($('named-auto'), !wizard.manual)
+        show($('named-manual'), wizard.manual)
+        const port = snap.orcaPort || 6768
+        $('manual-service').textContent = `127.0.0.1:${port}`
+        $('custom-service').textContent = `http://127.0.0.1:${port}`
+        const useSaved = snap.hasApiToken && tokenState.valid && !forceTokenEntry
+        show($('token-saved'), useSaved)
+        show($('token-entry'), !useSaved)
+        show($('named-token-saved'), Boolean(snap.hasApiToken))
+        show($('named-token-entry'), !snap.hasApiToken)
+        if (useSaved && tokenState.expiresOn) $('token-saved-text').textContent = `Using your saved token (valid until ${new Date(tokenState.expiresOn).toLocaleDateString()}).`
+        $('token-check').textContent = snap.hasApiToken && tokenState.checked && !tokenState.valid ? 'Your saved token no longer works. Create a new one.' : ''
+        $('w2-go').textContent = mode === 'worker'
+          ? (wizard.manual ? 'Connect to my relay' : snap.worker ? 'Redeploy relay' : 'Deploy relay')
+          : mode === 'named' ? (wizard.manual ? 'Connect my tunnel' : 'Create tunnel')
+          : mode === 'custom' ? 'Use this address' : 'Start quick tunnel'
+        $('w2-title').textContent = mode === 'worker' ? 'Connect Cloudflare' : mode === 'named' ? 'Connect your domain' : mode === 'custom' ? 'Enter your address' : 'Nothing to connect'
+
+        const status = current || {}
+        show($('w3-connected'), step === 3)
+        $('w3-endpoint').textContent = status.endpoint || ''
+        pairUis[0].setEnabled(step === 3 && status.state === 'connected')
+      }
+
+      function renderStatus() {
+        const status = current
+        if (!status) return
+        $('badge').className = `badge ${status.state}`
+        $('state').textContent = labels[status.state] || status.state
+        $('endpoint').textContent = status.endpoint || ''
+        $('message').textContent = status.message || (status.state === 'connected'
+          ? (status.mode === 'worker'
+            ? `Relaying to Orca on 127.0.0.1:${status.port}${status.phones ? ` · ${status.phones} phone connection(s)` : ''}.`
+            : `Forwarding to Orca on 127.0.0.1:${status.port}.`)
+          : status.state === 'stopped' ? 'Off. Phones cannot reach this computer through Cloudflare.' : '')
+        const running = status.state === 'starting' || status.state === 'connected'
+        $('start').disabled = running
+        $('stop').disabled = !running
+        const needsSetup = status.state === 'error' && status.needsSetup
+        show($('fix'), needsSetup && !wizard.open)
+        $('status-card').classList.toggle('attention', needsSetup)
+        pairUis[1].setEnabled(status.state === 'connected')
+        if (status.state !== 'connected') pairUis.forEach((ui) => ui.clear())
+        // While a setup step runs, its progress shows right under the button.
+        if (wizard.open && wizard.step === 2) $('w2-progress').textContent = status.state === 'starting' ? status.message || 'Working…' : ''
+      }
+
+      function renderSummary() {
+        const settings = snap.settings || {}
+        const m = settings.mode
+        $('summary-text').textContent = modeNames[m] || ''
+        $('summary-detail').textContent = m === 'worker' && snap.worker
+          ? `${snap.worker.workerUrl}${snap.worker.accountName ? ` · ${snap.worker.accountName}` : ''}`
+          : m === 'named' && snap.named ? `${snap.named.hostname}${snap.named.manual ? ' · tunnel you created in Cloudflare' : ` · tunnel ${snap.named.tunnelName}`}`
+          : m === 'custom' && snap.custom ? `${snap.custom.endpoint} · you run the tunnel/proxy`
+          : m === 'quick' ? 'Random trycloudflare.com address; pair again after each restart.' : ''
+        show($('remove'), Boolean(snap.named || snap.worker || snap.custom))
+        if (snap.version) $('version').textContent = snap.version
+      }
+
+      function applySnapshot(next) {
+        if (!next) return
+        snap = { ...snap, ...next }
+        if (snap.links) links = snap.links
+        if (next.status) current = next.status
+        const settings = snap.settings || {}
+        if (!document.querySelector('input[name="mode"]:checked')) {
+          const radio = document.querySelector(`input[name="mode"][value="${settings.mode || 'worker'}"]`)
+          if (radio) radio.checked = true
+          $('hostname').value = settings.hostname || ''
+          if (snap.custom && snap.custom.endpoint) $('custom-endpoint').value = snap.custom.endpoint
+          wizard.manual = Boolean((snap.worker && snap.worker.deployedBy === 'button') || (snap.named && snap.named.manual))
+          $('relay-fallback').checked = settings.relayFallback === true
+        }
+        if (next.updates) renderUpdates(next.updates)
+        renderAbout(snap.about)
+        render()
+      }
+
+      async function checkSavedToken() {
+        if (!snap.hasApiToken) return
+        const result = await request('verify-token', undefined, 20000)
+        tokenState = { checked: true, valid: result.valid === true, expiresOn: result.expiresOn || null }
+        render()
+      }
+
+      /* ================= Wizard actions ================= */
+      function goto(step) { wizard.step = step; render() }
+      function openWizard(step = 1) { Object.assign(wizard, { open: true, step, changing: snap.configured === true }); render() }
+      function closeWizard() { Object.assign(wizard, { open: false, step: 1, changing: false }); render() }
+
+      // Changing the connection type at any point moves the highlight back to step 2 for it.
+      document.querySelectorAll('input[name="mode"]').forEach((radio) => radio.addEventListener('change', () => {
+        $('w2-error').textContent = ''
+        if (wizard.step === 3) wizard.step = 2
+        render()
+      }))
+      $('w1-next').addEventListener('click', () => goto(2))
+      $('style-auto').addEventListener('click', () => { wizard.manual = false; $('w2-error').textContent = ''; if (wizard.step === 1) wizard.step = 2; render() })
+      $('style-manual').addEventListener('click', () => { wizard.manual = true; $('w2-error').textContent = ''; if (wizard.step === 1) wizard.step = 2; render() })
+      $('wizard-cancel').addEventListener('click', closeWizard)
+      // Starting to fill step 2 also confirms step 1.
+      for (const id of ['api-token', 'hostname', 'named-api-token', 'worker-url', 'tunnel-token', 'custom-endpoint']) $(id).addEventListener('focus', () => { if (wizard.step === 1) goto(2) })
+      $('w3-done').addEventListener('click', closeWizard)
+      $('token-change').addEventListener('click', () => { forceTokenEntry = true; render(); $('api-token').focus() })
+      $('change-setup').addEventListener('click', () => openWizard(1))
+      $('fix').addEventListener('click', () => openWizard(2))
+
+      $('w2-go').addEventListener('click', () => withButton($('w2-go'), async () => {
+        $('w2-error').textContent = ''
+        const mode = selectedMode()
+        const input = { mode, relayFallback: $('relay-fallback').checked }
+        if (mode === 'worker') {
+          if (!wizard.manual && !$('token-entry').classList.contains('hidden')) input.apiToken = $('api-token').value.trim()
+          if (wizard.manual) {
+            input.workerUrl = $('worker-url').value.trim()
+            if (!input.workerUrl) { $('w2-error').textContent = 'Paste the URL of the Worker you deployed.'; return }
+          }
+          if (!$('account-choice').classList.contains('hidden')) input.accountId = $('account-select').value
+          if (!$('worker-name-field').classList.contains('hidden')) input.workerName = $('worker-name').value.trim()
+        }
+        if (mode === 'named') {
+          input.hostname = $('hostname').value.trim()
+          if (wizard.manual) {
+            input.tunnelToken = $('tunnel-token').value.trim()
+            if (!input.tunnelToken) { $('w2-error').textContent = 'Paste the tunnel token (or the install command) from Cloudflare.'; return }
+          } else if (!snap.hasApiToken) input.apiToken = $('named-api-token').value.trim()
+        }
+        if (mode === 'custom') input.endpoint = $('custom-endpoint').value.trim()
+        $('w2-progress').textContent = mode === 'worker' ? 'Deploying to Cloudflare… the first time can take up to a minute.' : 'Working…'
+        const result = await request('setup', input)
+        $('w2-progress').textContent = ''
+        if (result.ok) {
+          $('api-token').value = ''
+          $('named-api-token').value = ''
+          $('tunnel-token').value = ''
+          forceTokenEntry = false
+          tokenState = { checked: false, valid: false }
+          show($('account-choice'), false)
+          show($('worker-name-field'), false)
+          applySnapshot(result)
+          goto(3)
+          checkSavedToken()
           return
         }
-        try {
-          const result = await orca.host.call('plugin.request', {
-            name: 'auto-setup',
-            input: {
-              relayDomain: document.getElementById('relay-domain').value.trim()
-            }
-          })
-          if (result.output?.ok) {
-            status.textContent = `Discovered account ${result.output.accountName}. Generate and download the Worker config next.`
-          } else {
-            status.textContent = result.output?.error ?? 'Cloudflare setup failed.'
+        applySnapshot(result)
+        if (result.needs === 'account') {
+          $('account-select').innerHTML = ''
+          for (const account of result.accounts || []) {
+            const option = document.createElement('option')
+            option.value = account.id
+            option.textContent = account.name
+            $('account-select').appendChild(option)
           }
-        } catch (error) {
-          status.textContent = `${error.code}: ${error.message}`
+          show($('account-choice'), true)
+          $('w2-error').textContent = 'Choose the account, then click the button again.'
+          checkSavedToken()
+        } else if (result.needs === 'worker-name') {
+          $('worker-name').value = `${(snap.settings && snap.settings.workerName) || 'orca-relay'}-2`
+          show($('worker-name-field'), true)
+          $('w2-error').textContent = result.error
+          checkSavedToken()
+        } else {
+          $('w2-error').textContent = result.error
         }
-      })
-      document.getElementById('generate').addEventListener('click', async () => {
-        try {
-          const result = await orca.host.call('plugin.request', {
-            name: 'generate-config'
-          })
-          status.textContent = result.output?.ok
-            ? 'Configuration generated.'
-            : result.output?.error ?? 'Could not generate the configuration.'
-        } catch (error) {
-          status.textContent = `${error.code}: ${error.message}`
+      }))
+
+      /* ================= Normal view actions ================= */
+      $('start').addEventListener('click', () => withButton($('start'), async () => {
+        const result = await request('start')
+        applySnapshot(result)
+        if (!result.ok) $('summary-error').textContent = result.error
+      }))
+      $('stop').addEventListener('click', () => withButton($('stop'), async () => applySnapshot(await request('stop'))))
+
+      // Removing is destructive (paired phones must pair again), so it takes a second click.
+      let removeArmed = null
+      $('remove').addEventListener('click', () => {
+        if (!removeArmed) {
+          $('remove').textContent = 'Click again to remove'
+          $('summary-error').textContent = 'This disconnects this computer and your paired phones will need to pair again. '
+            + (snap.worker && !snap.hasApiToken ? 'The relay Worker stays in your Cloudflare account.' : '')
+          removeArmed = setTimeout(() => {
+            removeArmed = null
+            $('remove').textContent = 'Remove setup'
+            $('summary-error').textContent = ''
+          }, 6000)
+          return
         }
+        clearTimeout(removeArmed)
+        removeArmed = null
+        $('remove').textContent = 'Remove setup'
+        withButton($('remove'), async () => {
+          $('summary-error').textContent = ''
+          const result = await request('remove', {})
+          applySnapshot(result)
+          if (!result.ok) $('summary-error').textContent = result.error
+        })
       })
-      document.getElementById('download').addEventListener('click', async () => {
-        try {
-          const result = await orca.host.call('plugin.request', {
-            name: 'download-config'
-          })
-          if (!result.output?.ok) {
-            status.textContent = result.output?.error ?? 'Could not load the configuration.'
-            return
-          }
-          await orca.files.saveAs({
-            suggestedName: '.wrangler-deploy-cloudflare.jsonc',
-            mimeType: 'application/json',
-            data: result.output.content
-          })
-        } catch (error) {
-          status.textContent = `${error.code}: ${error.message}`
+
+      /* ================= Updates ================= */
+      function renderUpdates(u) {
+        if (!u) return
+        snap.updates = u
+        const plugin = u.plugin && u.plugin.available ? u.plugin : null
+        const relay = u.relay && u.relay.available ? u.relay : null
+        show($('updates-card'), Boolean(plugin || relay))
+        $('updates-card').classList.toggle('attention', Boolean((plugin && plugin.blocking) || (relay && relay.mandatory)))
+        $('updates-title').textContent = (plugin && plugin.mandatory) || (relay && relay.mandatory) ? 'Required update' : 'Update available'
+        show($('plugin-update'), Boolean(plugin))
+        if (plugin) {
+          $('plugin-update-versions').textContent = `${plugin.current} → ${plugin.latest}`
+          show($('plugin-required'), plugin.mandatory)
+          $('plugin-update-notes').textContent = plugin.notes || ''
+          $('update-plugin').disabled = plugin.status === 'installing' || plugin.status === 'updated' || plugin.isDev
+          $('plugin-update-message').textContent = plugin.isDev
+            ? 'Development copy: update it by pulling the repository.'
+            : plugin.message || (plugin.blocking ? 'The relay stays off until this required update is installed.' : '')
         }
-      })
+        show($('relay-update'), Boolean(relay))
+        if (relay) {
+          const viaButton = relay.deployedBy === 'button'
+          $('relay-update-versions').textContent = `${relay.deployed} → ${relay.latest}`
+          show($('relay-required'), relay.mandatory)
+          $('relay-update-notes').textContent = relay.notes || ''
+          show($('relay-token'), !viaButton && !snap.hasApiToken)
+          show($('update-relay'), !viaButton)
+          $('update-relay').disabled = relay.status === 'installing'
+          $('relay-update-message').textContent = viaButton
+            ? 'Deployed with the Deploy to Cloudflare button: update it from your GitHub copy.'
+            : relay.message || ''
+        }
+        $('update-check-text').textContent = u.error
+          ? u.error
+          : u.checkedAt ? `checked ${new Date(u.checkedAt).toLocaleTimeString()}${plugin || relay ? '' : ', up to date'}` : 'Checking for updates…'
+      }
+      $('check-updates').addEventListener('click', () => withButton($('check-updates'), async () => {
+        $('update-check-text').textContent = 'Checking…'
+        const result = await request('check-updates')
+        if (result.ok) renderUpdates(result)
+        else $('update-check-text').textContent = result.error
+      }))
+      $('update-plugin').addEventListener('click', () => withButton($('update-plugin'), async () => {
+        const result = await request('update-plugin', undefined, 120000)
+        if (result.updates) renderUpdates(result.updates)
+        if (!result.ok) $('plugin-update-message').textContent = result.error
+      }))
+      $('update-relay').addEventListener('click', () => withButton($('update-relay'), async () => {
+        const result = await request('update-relay', { apiToken: $('relay-api-token').value.trim() }, 120000)
+        $('relay-api-token').value = ''
+        if (result.updates) renderUpdates(result.updates)
+        if (!result.ok) $('relay-update-message').textContent = result.error
+      }))
+      orca.plugin.on('updates', renderUpdates)
+
+      /* ================= About & links ================= */
+      function renderAbout(about) {
+        if (!about) return
+        show($('about'), true)
+        $('about-name').textContent = about.name
+        $('about-version').textContent = about.version
+        $('about-author').textContent = about.author || ''
+        show($('about-author-wrap'), Boolean(about.author))
+        show($('about-source-wrap'), Boolean(about.repository))
+        show($('about-issues-wrap'), Boolean(about.issues))
+      }
+      const external = (url) => { if (url) orca.shell.openExternal(url).catch(() => {}) }
+      const onLink = (id, url) => $(id).addEventListener('click', (event) => { event.preventDefault(); external(url()) })
+      onLink('about-author', () => snap.about && (snap.about.authorUrl || snap.about.repository))
+      onLink('about-source', () => snap.about && snap.about.repository)
+      onLink('about-issues', () => snap.about && snap.about.issues)
+      onLink('signup-link', () => 'https://dash.cloudflare.com/sign-up')
+      $('create-token').addEventListener('click', () => external(links.createToken))
+      $('relay-create-token').addEventListener('click', () => external(links.createToken))
+      $('deploy-button').addEventListener('click', () => external(links.deployButton))
+      $('open-tokens').addEventListener('click', () => external(links.createTunnelToken || 'https://dash.cloudflare.com/profile/api-tokens'))
+      $('open-tunnels').addEventListener('click', () => external('https://one.dash.cloudflare.com/'))
+
+      orca.plugin.on('status', (status) => { current = status; snap.status = status; render() })
+      request('status').then((result) => { applySnapshot(result); checkSavedToken() })
     </script>
   </body>
 </html>

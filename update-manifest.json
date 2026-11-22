@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "plugin": {
+    "latest": "2.4.0",
+    "minimum": "2.1.0",
+    "notes": "2.1.0 adds required security hardening for the Worker relay (E2EE v2 only, header auth, rate limits, expiring pairing codes)."
+  },
+  "relay": {
+    "latest": "1.1.0",
+    "minimum": "1.1.0",
+    "notes": "Relay 1.1.0: desktop key in the Authorization header, per-IP rate limits, no presence leak."
+  }
+}

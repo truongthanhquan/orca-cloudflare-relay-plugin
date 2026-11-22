@@ -1,0 +1,14 @@
+{
+  // Orca Cloudflare Relay. Deploys on the Workers Free plan (SQLite-backed Durable Object).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "orca-relay",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [{ "name": "RELAY", "class_name": "RelayHost" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RelayHost"] }],
+  "observability": { "enabled": false }
+}
