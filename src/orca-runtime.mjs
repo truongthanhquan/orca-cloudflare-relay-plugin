@@ -1,3 +1,4 @@
+import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
@@ -55,7 +56,8 @@ export function orcaCliCandidates({
   platform = process.platform,
   execPath = process.execPath,
   pathEnv = process.env.PATH ?? '',
-  home = process.env.HOME ?? process.env.USERPROFILE ?? ''
+  // Orca gives workers only an allowlisted environment (no USERPROFILE on Windows): ask the OS.
+  home = process.env.HOME || homedir()
 } = {}) {
   const names =
     platform === 'win32' ? ['orca.exe', 'orca.cmd'] : platform === 'linux' ? ['orca-ide', 'orca'] : ['orca']
