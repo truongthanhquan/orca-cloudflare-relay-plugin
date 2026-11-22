@@ -218,6 +218,59 @@ The plugin checks for updates 15 seconds after Orca starts, then every 6 hours, 
 3. Commit to `main` and tag `vX.Y.Z`. Orca's git updater follows the branch (or the newest tag
    for tag installs).
 
+## What this plugin does on your machine
+
+This plugin runs as an Orca **trusted worker** (Orca's "Full access" label): a Node process with
+your user's permissions. That is a lot of trust, so here is everything it does with it. The
+source is plain, unminified JavaScript in [`src/`](src/) and [`worker/src/`](worker/src/), with
+no dependencies besides a vendored MIT QR code generator.
+
+**Processes it starts**
+
+| Process | When | Why |
+| --- | --- | --- |
+| `orca pair --mobile --address <endpoint> --json [--rotate] [--relay]` | You click **Show pairing QR code**, and again when a code is hidden or expires | Creates Orca's normal pairing code for your relay address, or replaces it so an old one stops working |
+| `orca plugin list --json` / `orca plugin open <this plugin> --panel cloudflare-relay` | First run, and the status bar item | Opens this plugin's own panel |
+| `orca plugin update <this plugin> --json` | You click **Update**, or a required update arrives and **Plugin updates** allows it | Installs a newer version through Orca's own updater, which keeps Orca's listing and approval checks |
+| `cloudflared tunnel run` / `cloudflared tunnel --url …` | Tunnel modes only, while the tunnel is on | Runs the Cloudflare tunnel. The tunnel token goes in an environment variable, never in the command line |
+| `tar -xzf` | macOS only, once, when it downloads `cloudflared` | Unpacks the downloaded `cloudflared` archive |
+| `ps -p <pid> -o comm=` | At startup, tunnel modes only | Stops a `cloudflared` this plugin left behind after a crash, and only if that pid really is `cloudflared` |
+
+The Worker relay mode starts no processes at all. It opens WebSockets from the plugin itself.
+
+**Network connections**
+
+| Host | When | What is sent |
+| --- | --- | --- |
+| `api.cloudflare.com` | Only during setup, update or removal, with the token you pasted | Deploys or deletes the relay Worker, or creates or deletes the tunnel and its DNS record, in **your** account |
+| Your relay Worker (`<name>.<you>.workers.dev` or the URL you entered) | While the relay is on | This desktop's relay key (in a header), and the phone traffic, which is end-to-end encrypted |
+| `github.com/cloudflare/cloudflared/releases` | Tunnel modes, the first time only | Downloads `cloudflared` version 2026.11.1. Its SHA-256 is checked against values pinned in [`src/cloudflared-binary.mjs`](src/cloudflared-binary.mjs) before it is used. Skipped if you set **cloudflared path** |
+| `raw.githubusercontent.com` (this repository's `update-manifest.json`) | 15 seconds after start, then every 6 hours (the update settings control what is installed, not the check) | A plain GET with no identifiers. Nothing about you or your setup is sent. The relay Worker's public `/health` is also read to compare its version |
+| Your own address (custom mode) | Every 60 seconds while on | A plain HTTPS GET of `/web-index.html`, to show whether it reaches your Orca |
+| `127.0.0.1:<Orca port>` | For each relayed phone | The phone's encrypted traffic, handed to Orca's own mobile server |
+
+Links such as **Create token** or **Deploy to Cloudflare** open in your browser only when you
+click them. There is **no telemetry, analytics or crash reporting**, and no server run by the
+plugin author: the relay runs in your own Cloudflare account.
+
+**Files and secrets**
+
+- **Secrets** (Cloudflare API token, tunnel token, relay key and admin or owner token) live in
+  Orca's plugin secret store. The API token is deleted right after setup unless you turn on
+  **Keep the Cloudflare API token**.
+- **Plugin storage and settings** hold only non-secret state: the connection type, the Worker
+  URL and host id, the tunnel id and hostname.
+- **Cache folder** (`~/Library/Caches/orca-cloudflare-relay` on macOS,
+  `%LOCALAPPDATA%\orca-cloudflare-relay` on Windows, `~/.cache/orca-cloudflare-relay` on Linux)
+  holds the downloaded `cloudflared`, an empty config file and a pid file.
+- **Read-only:** Orca's `orca-runtime.json` (to find Orca's port) and `orca-devices.json` (to
+  notice that a phone used the code on screen, so the code can be removed). The plugin never
+  writes to Orca's files, and pairing secrets are never logged or sent to the panel.
+
+**Removing it:** **Remove setup** deletes what it created in Cloudflare (when it still has a
+token) and forgets every secret. Uninstalling the plugin then leaves only the cache folder,
+which you can delete.
+
 ## Security
 
 Pairing through Cloudflare keeps the same guarantees as LAN pairing, and adds relay-specific
