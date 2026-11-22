@@ -1,0 +1,12 @@
+{
+  "name": "orca-cloudflare-relay-plugin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "generate": "node bin/generate.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

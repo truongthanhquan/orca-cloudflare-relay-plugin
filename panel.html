@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        margin: 0;
+        padding: 12px;
+        font-family: system-ui, sans-serif;
+        color: var(--orca-foreground, #ddd);
+        background: var(--orca-background, transparent);
+      }
+      button {
+        margin: 6px 6px 6px 0;
+        padding: 6px 10px;
+        border: 1px solid var(--orca-border, #555);
+        border-radius: 6px;
+        background: var(--orca-secondary, #2a2a2a);
+        color: var(--orca-foreground, #ddd);
+        cursor: pointer;
+      }
+      #status { min-height: 1.4em; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>Cloudflare Relay Setup</h1>
+    <p>Set the Cloudflare fields in Orca Settings, generate the config, then download it.</p>
+    <button id="generate">Generate config</button>
+    <button id="download">Download .jsonc</button>
+    <p id="status"></p>
+    <script>
+      const status = document.getElementById('status')
+      document.getElementById('generate').addEventListener('click', async () => {
+        try {
+          const result = await orca.host.call('plugin.request', {
+            name: 'generate-config'
+          })
+          status.textContent = result.output?.ok
+            ? 'Configuration generated.'
+            : result.output?.error ?? 'Could not generate the configuration.'
+        } catch (error) {
+          status.textContent = `${error.code}: ${error.message}`
+        }
+      })
+      document.getElementById('download').addEventListener('click', async () => {
+        try {
+          const result = await orca.host.call('plugin.request', {
+            name: 'download-config'
+          })
+          if (!result.output?.ok) {
+            status.textContent = result.output?.error ?? 'Could not load the configuration.'
+            return
+          }
+          await orca.files.saveAs({
+            suggestedName: '.wrangler-deploy-cloudflare.jsonc',
+            mimeType: 'application/json',
+            data: result.output.content
+          })
+        } catch (error) {
+          status.textContent = `${error.code}: ${error.message}`
+        }
+      })
+    </script>
+  </body>
+</html>

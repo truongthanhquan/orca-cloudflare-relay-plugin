@@ -1,0 +1,40 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "execution": "trusted-worker",
+  "id": "cloudflare-relay",
+  "name": "Cloudflare Relay Setup",
+  "version": "1.0.0",
+  "description": "Generate a compatible Orca relay deployment configuration for Cloudflare Workers.",
+  "author": { "name": "truongthanhquan" },
+  "repository": "https://github.com/truongthanhquan/orca-cloudflare-relay-plugin",
+  "license": "MIT",
+  "engines": { "orca": ">=1.4.246" },
+  "pluginApi": 1,
+  "main": "src/main.mjs",
+  "contributes": {
+    "panels": [
+      { "id": "cloudflare-relay", "title": "Cloudflare Relay", "icon": "cloud", "entry": "panel.html" }
+    ],
+    "commands": [
+      { "id": "cloudflare-relay.generate", "title": "Cloudflare Relay: Generate deployment config" },
+      { "id": "cloudflare-relay.validate", "title": "Cloudflare Relay: Validate deployment settings" }
+    ],
+    "settings": [
+      { "key": "accountId", "title": "Cloudflare account ID", "type": "string" },
+      { "key": "workerName", "title": "Worker name", "type": "string", "default": "orca-relay-edge" },
+      { "key": "domain", "title": "Director hostname", "type": "string" },
+      { "key": "edgeDomain", "title": "Edge/cell hostname", "type": "string" },
+      { "key": "hyperdriveId", "title": "Hyperdrive configuration ID", "type": "string" },
+      { "key": "jwksUrl", "title": "Relay JWKS URL", "type": "string" },
+      { "key": "authIssuer", "title": "JWT issuer", "type": "string" },
+      { "key": "audience", "title": "JWT audience", "type": "string", "default": "orca-relay" },
+      { "key": "adminIssuer", "title": "Director admin issuer", "type": "string" }
+    ]
+  },
+  "capabilities": [
+    { "kind": "storage:own" },
+    { "kind": "settings:own" },
+    { "kind": "secrets:own" }
+  ]
+}
