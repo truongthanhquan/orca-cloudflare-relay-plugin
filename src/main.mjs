@@ -62,6 +62,15 @@ const MANIFEST = (() => {
 })()
 const PLUGIN_VERSION = MANIFEST.version
 /** A shown pairing code is invalidated after this long (or when the relay stops). */
+/** A JSON-safe copy: `undefined` object fields are removed (Orca's storage rejects them). */
+export function withoutUndefined(value) {
+  if (Array.isArray(value)) return value.map((item) => (item === undefined ? null : withoutUndefined(item)))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).map(([k, item]) => [k, withoutUndefined(item)]))
+  }
+  return value
+}
+
 export const PAIRING_CODE_TTL_MS = 5 * 60_000
 /** How often a shown code checks whether a phone has used it. */
 const PAIRING_WATCH_INTERVAL_MS = 1500
@@ -106,6 +115,11 @@ export default function activate(orca) {
   let busy = null
   /** Endpoint of the pairing code currently on screen, and its expiry timer. */
   let shownCode = null
+
+  /** Orca's storage accepts only strict JSON, so drop `undefined` fields before saving. */
+  async function saveState(key, value) {
+    await orca.storage.set(key, withoutUndefined(value))
+  }
 
   async function settings() {
     const all = (await orca.settings.get()) ?? {}
@@ -262,7 +276,7 @@ export default function activate(orca) {
         const request = await cloudflareRequest()
         if (request) {
           await updateTunnelPort({ request, ...named, port })
-          await orca.storage.set(KEYS.named, { ...named, port })
+          await saveState(KEYS.named, { ...named, port })
         } else {
           log(`Orca now listens on ${port} but the tunnel targets ${named.port}; update the tunnel's service in Cloudflare.`)
           setTimeout(() => {
@@ -397,7 +411,7 @@ export default function activate(orca) {
     await registerRelayHost({ workerUrl: relay.workerUrl, hostId, hostKey, adminToken })
     await orca.secrets.set(KEYS.hostKey, hostKey)
     if (usingWorkerUrl) await orca.secrets.set(KEYS.adminToken, adminToken)
-    await orca.storage.set(KEYS.worker, { ...relay, hostId, ownerClaimed: usingWorkerUrl ? locksOwner(health) : undefined })
+    await saveState(KEYS.worker, { ...relay, hostId, ...(usingWorkerUrl ? { ownerClaimed: locksOwner(health) } : {}) })
     // Least privilege: the token can edit every Worker in the account and is only needed to
     // deploy, so forget it unless the user asked to keep it (Cloudflare can also revoke it).
     if (!config.keepApiToken) await orca.secrets.delete(KEYS.apiToken)
@@ -419,7 +433,7 @@ export default function activate(orca) {
     await registerRelayHost({ workerUrl: relay.workerUrl, hostId: relay.hostId, hostKey, adminToken: ownerToken, timeoutMs: 20_000 })
     await orca.secrets.set(KEYS.adminToken, ownerToken)
     const current = await orca.storage.get(KEYS.worker)
-    if (current?.hostId === relay.hostId) await orca.storage.set(KEYS.worker, { ...current, ownerClaimed: true })
+    if (current?.hostId === relay.hostId) await saveState(KEYS.worker, { ...current, ownerClaimed: true })
     log('Locked the relay Worker to this desktop.')
   }
 
@@ -432,7 +446,7 @@ export default function activate(orca) {
       const config = await settings()
       const { port } = await findOrcaWebSocketPort({ override: config.localPort })
       await orca.secrets.set(KEYS.tunnelToken, parsed.token)
-      await orca.storage.set(KEYS.named, { hostname, tunnelId: parsed.tunnelId, accountId: parsed.accountId, port, manual: true, tunnelName: '(created in Cloudflare)' })
+      await saveState(KEYS.named, { hostname, tunnelId: parsed.tunnelId, accountId: parsed.accountId, port, manual: true, tunnelName: '(created in Cloudflare)' })
       await orca.settings.set('hostname', hostname)
       return
     }
@@ -446,7 +460,7 @@ export default function activate(orca) {
     const result = await provisionNamedTunnel({ request, hostname, tunnelName: config.tunnelName, port })
     await orca.secrets.set(KEYS.tunnelToken, result.token)
     const { token: _token, ...stored } = result
-    await orca.storage.set(KEYS.named, { ...stored, port })
+    await saveState(KEYS.named, { ...stored, port })
     await orca.settings.set('hostname', hostname)
   }
 

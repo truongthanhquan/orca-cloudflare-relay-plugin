@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "plugin": {
-    "latest": "2.5.0",
+    "latest": "2.5.1",
     "minimum": "2.1.0",
-    "notes": "2.5.0: pairing codes vanish as soon as a phone pairs, the pairing link never reaches the panel, Deploy-button relays are locked to your desktop, tighter relay limits."
+    "notes": "2.5.1 fixes \"value: Invalid input\" after deploying the relay with a Cloudflare token (2.5.0). Also in 2.5.x: pairing codes vanish as soon as a phone pairs, Deploy-button relays are locked to your desktop, tighter relay limits."
   },
   "relay": {
     "latest": "1.2.0",

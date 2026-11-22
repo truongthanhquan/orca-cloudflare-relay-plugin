@@ -1,3 +1,4 @@
+import { assertStrictJson } from './strict-json.mjs'
 import assert from 'node:assert/strict'
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -101,7 +102,7 @@ function fakeOrca(settings) {
     host: { call: async () => ({ ok: true }) },
     panels: { handle: (name, fn) => handlers.set(name, fn), post: () => {} },
     commands: { register: () => {} },
-    storage: { get: async (k) => store.get(k) ?? null, set: async (k, v) => void store.set(k, v), delete: async (k) => void store.delete(k) },
+    storage: { get: async (k) => store.get(k) ?? null, set: async (k, v) => { assertStrictJson(v); store.set(k, v) }, delete: async (k) => void store.delete(k) },
     secrets: { get: async () => null, set: async () => {}, delete: async () => {} },
     settings: { get: async (key) => (key ? values.get(key) : Object.fromEntries(values)), set: async (k, v) => void values.set(k, v) }
   }
