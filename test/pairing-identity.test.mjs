@@ -53,7 +53,7 @@ function pluginCopy() {
   const handlers = new Map()
   const store = new Map()
   const secrets = new Map()
-  const settings = new Map([['mode', 'worker'], ['keepApiToken', true]])
+  const settings = new Map([['mode', 'worker'], ['keepApiToken', true], ['localPort', 6768]])
   return {
     handlers,
     store,

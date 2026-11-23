@@ -4,7 +4,7 @@
   "execution": "trusted-worker",
   "id": "cloudflare-relay",
   "name": "Cloudflare Relay",
-  "version": "2.7.0",
+  "version": "2.7.1",
   "description": "Connect Orca Mobile to this desktop from anywhere through your free Cloudflare account. After installing, click \"Set up relay\" (cloud icon) in the status bar (or run \"Set up / open panel\") and follow 3 steps. Phones pair with a normal QR code; no app changes needed. Not affiliated with Cloudflare.",
   "author": {
     "name": "truongthanhquan",
@@ -95,19 +95,19 @@
       {
         "key": "relayUpdates",
         "title": "Relay Worker updates",
-        "description": "How the relay Worker in your Cloudflare account is updated when this plugin ships a newer one. Redeploying keeps your phones paired. Automatic updates need the Cloudflare token kept on this computer (\"Keep the Cloudflare API token\"); otherwise the panel asks for a token.",
+        "description": "How the relay Worker in your Cloudflare account is updated when this plugin ships a newer one. By default the panel asks and nothing is deployed until you click Update relay; a required (security) update keeps the relay off until then. Redeploying keeps your phones paired. Automatic updates are opt-in and need the Cloudflare token kept on this computer (\"Keep the Cloudflare API token\").",
         "type": "string",
         "enum": [
-          "all",
+          "off",
           "mandatory",
-          "off"
+          "all"
         ],
         "enumLabels": [
-          "Install all updates automatically",
+          "Ask before every update (default)",
           "Install required updates automatically, ask for others",
-          "Ask before every update"
+          "Install all updates automatically"
         ],
-        "default": "mandatory"
+        "default": "off"
       },
       {
         "key": "keepApiToken",

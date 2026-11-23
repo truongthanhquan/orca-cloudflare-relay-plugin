@@ -8,7 +8,7 @@ function fakeOrca() {
   const commands = new Map()
   const store = new Map()
   const secrets = new Map()
-  const settings = new Map([['mode', 'worker']])
+  const settings = new Map([['mode', 'worker'], ['localPort', 6768]])
   const logs = []
   return {
     handlers,

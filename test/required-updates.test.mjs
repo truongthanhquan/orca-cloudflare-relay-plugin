@@ -59,7 +59,7 @@ function fakeOrca({ settings = {}, apiToken = null } = {}) {
     ['tunnel-enabled', true]
   ])
   const secrets = new Map([['relayHostKey', 'k'.repeat(43)], ['relayAdminToken', 'a'.repeat(43)], ...(apiToken ? [['cloudflareApiToken', apiToken]] : [])])
-  const values = new Map(Object.entries({ mode: 'worker', orcaCliPath: '/nonexistent/orca', keepApiToken: true, ...settings }))
+  const values = new Map(Object.entries({ mode: 'worker', orcaCliPath: '/nonexistent/orca', keepApiToken: true, localPort: 6768, ...settings }))
   const bar = []
   return {
     handlers,
@@ -121,9 +121,20 @@ test('a plugin version with a known security problem turns the relay off until i
   })
 })
 
-test('a required relay Worker update deploys by itself when a token is kept, keeping the relay on', async () => {
+test('by default nothing deploys by itself: a required relay update waits for Update relay, even with a kept token', async () => {
   const net = fakeNetwork({ manifest: { schema: 1, plugin: { latest: '2.6.1' }, relay: { latest: '1.2.0', minimum: '1.2.0' } }, deployedVersion: '1.1.0' })
   const orca = fakeOrca({ apiToken: 'cf-token-for-tests' })
+  await session(net, orca, async () => {
+    await orca.handlers.get('check-updates')()
+    await settle()
+    assert.equal(net.deploys, 0)
+    assert.equal(orca.bar.at(-1).text, 'Update required')
+  })
+})
+
+test('opted in, a required relay Worker update deploys by itself when a token is kept, keeping the relay on', async () => {
+  const net = fakeNetwork({ manifest: { schema: 1, plugin: { latest: '2.6.1' }, relay: { latest: '1.2.0', minimum: '1.2.0' } }, deployedVersion: '1.1.0' })
+  const orca = fakeOrca({ apiToken: 'cf-token-for-tests', settings: { relayUpdates: 'mandatory' } })
   await session(net, orca, async () => {
     await orca.handlers.get('check-updates')()
     await settle()

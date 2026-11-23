@@ -226,13 +226,14 @@ the vulnerable version. It works the same way for the plugin and the Worker:
 | | The plugin is below `plugin.minimum` | The relay Worker is below `relay.minimum` (or on an older protocol) |
 |---|---|---|
 | The relay | Off until updated. The status bar reads `Update required`, and the panel shows a **Security update** card | Off until redeployed. Same status bar and card |
-| The fix | **Update now** (one click), Settings → Plugins → **Update**, or Orca's automatic catalog updates | **Automatic** when a Cloudflare token is kept and **Relay Worker updates** isn't "Ask before every update". Otherwise paste a token and click **Update relay**. A Deploy-button relay is updated from your GitHub copy |
+| The fix | **Update now** (one click), Settings → Plugins → **Update**, or Orca's automatic catalog updates Click **Update relay** (paste a token if none is kept). Automatic only if you opted in under **Relay Worker updates** and keep a token. A Deploy-button relay is updated from your GitHub copy |
 | Afterwards | Orca restarts the plugin and the relay reconnects by itself | The relay reconnects by itself |
 
 Phones stay paired through both fixes. Safeguards:
 - **Offline:** a known minimum is saved, so being offline (or GitHub being blocked) can't skip it.
 - **Always a way out:** a minimum counts only when a version that meets it is published.
-- **Nothing installs by itself:** the plugin is only installed by Orca or your click.
+- **Nothing installs or deploys by itself** unless you opt in: the plugin is only installed by
+  Orca or your click, and the relay Worker only redeploys on your click by default.
 - **Development copies** never block.
 - **Worker fixes that need a newer plugin** (the plugin can deploy only the Worker it ships) ask
   for the plugin update first.
@@ -243,10 +244,10 @@ The plugin does that part.
   ships (`worker/src/index.js`). Nothing else is fetched.
 - **Required relay updates:** when the deployed relay speaks an older protocol than the plugin.
 - **How it updates:** a redeploy keeps the same host id and keys, so **phones stay paired**.
-- **The "Relay Worker updates" setting** decides what deploys without asking: all updates,
-  required ones only (default), or none. Automatic relay updates need a Cloudflare token kept on
-  this computer ("Keep the Cloudflare API token"); otherwise the panel's update card asks for a
-  token when you click **Update relay**.
+- **The "Relay Worker updates" setting** decides what deploys without asking: nothing (the
+  default: the panel asks and you click **Update relay**), required updates only, or all
+  updates. The automatic choices are opt-in and need a Cloudflare token kept on this computer
+  ("Keep the Cloudflare API token").
 - **Deploy-button relays** update from your GitHub copy, not from the plugin.
 
 **Phones stay paired through updates.** A paired phone dials
@@ -288,6 +289,7 @@ no dependencies besides a vendored MIT QR code generator.
 | Process | When | Why |
 | --- | --- | --- |
 | `orca pair --mobile --address <endpoint> --json [--rotate] [--relay]` | You click **Show pairing QR code**, and again when a code is hidden or expires | Creates Orca's normal pairing code for your relay address, or replaces it so an old one stops working |
+| `orca pair --mobile --address 127.0.0.1 --json` | When the relay starts or is set up (skipped if **Local Orca port** is set) | Reads only the local port from Orca's answer, so no Orca file is read. Without `--rotate` it reuses Orca's unused code, and the link in the answer is discarded |
 | `orca plugin list --json` / `orca plugin open <this plugin> --panel cloudflare-relay` | First run, the status bar item, and when a newer version is announced | Opens this plugin's own panel, and finds its key for the `orca plugin update <key>` line in the update card |
 | `orca plugin update <this plugin> --json` | Only when you click **Update now** | Runs Orca's own updater. Orca applies its checks and asks you to approve an update that adds access |
 | `cloudflared tunnel run` / `cloudflared tunnel --url …` | Tunnel modes only, while the tunnel is on | Runs the Cloudflare tunnel. The tunnel token goes in an environment variable, never in the command line |
@@ -328,9 +330,11 @@ plugin author: the relay runs in your own Cloudflare account.
   Linux): each relay Worker URL and the host id this computer registered on it, so a reinstall
   or another copy of the plugin keeps the address paired phones use. Nothing secret: the host id
   is already in every pairing code. The file is readable only by you.
-- **Read-only:** Orca's `orca-runtime.json`, only to find the local port Orca listens on. The
-  plugin never reads Orca's device list or any other Orca file, never writes to Orca's files,
-  and pairing secrets are never logged or sent to the panel.
+- **Orca's files:** none. The plugin never reads or writes Orca's private files (its device
+  list, runtime metadata or settings). It asks Orca only through Orca's own CLI: `orca pair
+  --mobile` for pairing codes and for the local port Orca listens on (unless you set **Local
+  Orca port**), and `orca plugin` for its own key and updates. Pairing secrets are never logged
+  or sent to the panel.
 
 **Removing it:** **Remove setup** deletes what it created in Cloudflare (when it still has a
 token) and forgets every secret. Uninstalling the plugin then leaves only the cache folder and

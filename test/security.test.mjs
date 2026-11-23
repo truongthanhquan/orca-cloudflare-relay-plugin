@@ -47,11 +47,11 @@ test('splice delivers queued frames in order once the other side opens', () => {
   assert.deepEqual(local.sent, ['hello', 'a', 'b'])
 })
 
-test('never reads Orca\'s device credentials or decodes pairing codes', () => {
+test('never reads Orca\'s private files or decodes pairing codes', () => {
   const files = ['panel.html', ...readdirSync('src').filter((f) => f.endsWith('.mjs')).map((f) => `src/${f}`)]
   for (const file of files) {
     const source = readFileSync(file, 'utf8')
-    assert.doesNotMatch(source, /orca-devices|deviceToken/, file)
+    assert.doesNotMatch(source, /orca-devices|orca-runtime\.json|mobile-ws-fallback|Application Support', 'orca'|deviceToken/, file)
   }
 })
 

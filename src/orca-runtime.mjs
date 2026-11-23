@@ -1,9 +1,7 @@
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
 import { delimiter, dirname, join, resolve } from 'node:path'
-import { orcaUserDataDir } from './paths.mjs'
 
 export const DEFAULT_ORCA_WS_PORT = 6768
 
@@ -11,26 +9,13 @@ function validPort(value) {
   return Number.isInteger(value) && value > 0 && value <= 65535 ? value : null
 }
 
-/** Port of a `ws://host:port` transport endpoint from orca-runtime.json. */
-export function portFromRuntimeMetadata(metadata) {
-  const transports = Array.isArray(metadata?.transports)
-    ? metadata.transports
-    : metadata?.transport
-      ? [metadata.transport]
-      : []
-  const websocket = transports.find((item) => item?.kind === 'websocket')
-  if (typeof websocket?.endpoint !== 'string') return null
+/** Port of a `ws://host:port` endpoint, or null. */
+export function portFromEndpoint(endpoint) {
+  if (typeof endpoint !== 'string') return null
   try {
-    const url = new URL(websocket.endpoint)
+    const url = new URL(endpoint)
+    if (url.protocol !== 'ws:' && url.protocol !== 'wss:') return null
     return validPort(Number(url.port || (url.protocol === 'wss:' ? 443 : 80)))
-  } catch {
-    return null
-  }
-}
-
-async function readJson(path) {
-  try {
-    return JSON.parse(await readFile(path, 'utf8'))
   } catch {
     return null
   }
@@ -38,16 +23,23 @@ async function readJson(path) {
 
 /**
  * The local port of the desktop's mobile/runtime WebSocket server — the same server LAN
- * pairing points phones at. Order: explicit override, the running app's runtime metadata,
- * the persisted fallback port, then Orca's default.
+ * pairing points phones at. Order: the "Orca port" setting, then Orca's own answer through its
+ * CLI (`orca pair --mobile --address 127.0.0.1` reports the local endpoint; without `--rotate`
+ * it reuses Orca's unused offer, and its link is dropped here), then Orca's default. The plugin
+ * never reads Orca's private files.
  */
-export async function findOrcaWebSocketPort({ override, userDataDir = orcaUserDataDir() } = {}) {
+export async function findOrcaWebSocketPort({ override, cli, run = runCli } = {}) {
   const explicit = validPort(Number(override))
   if (explicit) return { port: explicit, source: 'setting' }
-  const fromRuntime = portFromRuntimeMetadata(await readJson(join(userDataDir, 'orca-runtime.json')))
-  if (fromRuntime) return { port: fromRuntime, source: 'runtime' }
-  const fallback = validPort((await readJson(join(userDataDir, 'mobile-ws-fallback-port.json')))?.port)
-  if (fallback) return { port: fallback, source: 'fallback' }
+  if (cli) {
+    try {
+      const { stdout } = await run(cli, ['pair', '--mobile', '--address', '127.0.0.1', '--json'], { timeoutMs: 20_000 })
+      const port = portFromEndpoint(parseCliJson(stdout)?.endpoint)
+      if (port) return { port, source: 'orca' }
+    } catch {
+      // Fall through to Orca's default port.
+    }
+  }
   return { port: DEFAULT_ORCA_WS_PORT, source: 'default' }
 }
 

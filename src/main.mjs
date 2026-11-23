@@ -120,6 +120,7 @@ export default function activate(orca) {
   let busy = null
   /** Endpoint of the pairing code currently on screen, and its expiry timer. */
   let shownCode = null
+  let knownOrcaPort = null
 
   /** Orca's storage accepts only strict JSON, so drop `undefined` fields before saving. */
   async function saveState(key, value) {
@@ -140,7 +141,7 @@ export default function activate(orca) {
       localPort: Number(all.localPort) || 0,
       cloudflaredPath: typeof all.cloudflaredPath === 'string' ? all.cloudflaredPath.trim() : '',
       orcaCliPath: typeof all.orcaCliPath === 'string' ? all.orcaCliPath.trim() : '',
-      relayUpdates: UPDATE_POLICIES.includes(all.relayUpdates) ? all.relayUpdates : 'mandatory'
+      relayUpdates: UPDATE_POLICIES.includes(all.relayUpdates) ? all.relayUpdates : 'off'
     }
   }
 
@@ -239,11 +240,18 @@ export default function activate(orca) {
     return apiToken ? createCloudflareClient(apiToken) : null
   }
 
+  /** Orca's local WebSocket port, asked on each start or setup (the panel shows the last answer). */
+  async function orcaPort(config) {
+    const { port } = await findOrcaWebSocketPort({ override: config.localPort, cli: findOrcaCli({ override: config.orcaCliPath || undefined }) })
+    knownOrcaPort = port
+    return port
+  }
+
   async function startTunnel() {
     const blocked = blockReason()
     if (blocked) throw new UpdateRequired(blocked)
     const config = await settings()
-    const { port } = await findOrcaWebSocketPort({ override: config.localPort })
+    const port = await orcaPort(config)
 
     if (config.mode === 'worker') {
       use(bridge)
@@ -346,7 +354,7 @@ export default function activate(orca) {
       settings: config,
       named: named ? { hostname: named.hostname, tunnelName: named.tunnelName, zoneName: named.zoneName, manual: named.manual === true } : null,
       custom: (await orca.storage.get(KEYS.custom)) ?? null,
-      orcaPort: (await findOrcaWebSocketPort({ override: config.localPort }).catch(() => ({ port: null }))).port,
+      orcaPort: knownOrcaPort,
       worker: relay ? { workerUrl: relay.workerUrl, deployedBy: relay.deployedBy, accountName: relay.accountName ?? null } : null,
       hasApiToken: Boolean(await orca.secrets.get(KEYS.apiToken)),
       orcaCliFound: Boolean(findOrcaCli({ override: config.orcaCliPath || undefined })),
@@ -522,7 +530,7 @@ export default function activate(orca) {
       // the plugin only runs cloudflared with that tunnel's token (no API token at all).
       const parsed = parseTunnelToken(input.tunnelToken)
       const config = await settings()
-      const { port } = await findOrcaWebSocketPort({ override: config.localPort })
+      const port = await orcaPort(config)
       await orca.secrets.set(KEYS.tunnelToken, parsed.token)
       await saveState(KEYS.named, { hostname, tunnelId: parsed.tunnelId, accountId: parsed.accountId, port, manual: true, tunnelName: '(created in Cloudflare)' })
       await orca.settings.set('hostname', hostname)
@@ -532,7 +540,7 @@ export default function activate(orca) {
     const request = await cloudflareRequest()
     if (!request) throw new Error('Paste a Cloudflare API token first.')
     const config = await settings()
-    const { port } = await findOrcaWebSocketPort({ override: config.localPort })
+    const port = await orcaPort(config)
     use(tunnel)
     tunnel.setStatus({ state: 'starting', mode: 'named', message: `Creating tunnel for ${hostname}…` })
     const result = await provisionNamedTunnel({ request, hostname, tunnelName: config.tunnelName, port })
@@ -822,7 +830,7 @@ export default function activate(orca) {
 
   async function applyUpdatePolicies(config) {
     const relay = updates.relay
-    // A required relay update deploys by itself (default policy) when a token is kept; it can only
+    // Opt-in only ("Relay Worker updates"): deploys by itself when a token is kept; it can only
     // deploy the Worker this plugin ships, so one that needs a newer plugin waits for it.
     if (relay && relay.status === 'idle' && relay.deployedBy === 'plugin' && !relay.needsPlugin && shouldAutoInstall(config.relayUpdates, relay) && (await orca.secrets.get(KEYS.apiToken))) {
       await updateRelay().catch((error) => log(`Automatic relay update failed: ${errorMessage(error)}`))

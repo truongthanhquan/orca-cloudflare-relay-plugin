@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "plugin": {
-    "latest": "2.7.0",
+    "latest": "2.7.1",
     "minimum": "2.1.0",
-    "notes": "2.7.0: the plugin no longer reads Orca's device list (it holds each phone's credentials). See and remove paired phones under Paired devices on Orca's Mobile page; click Done, hide code after pairing. Since 2.6.0 Orca installs plugin updates (Settings → Plugins → Update)."
+    "notes": "2.7.1: the plugin reads none of Orca's private files (it asks Orca's CLI for the local port) and the relay Worker redeploys only when you click Update relay unless you opt in. 2.7.0: see and remove paired phones under Paired devices on Orca's Mobile page."
   },
   "relay": {
     "latest": "1.2.0",

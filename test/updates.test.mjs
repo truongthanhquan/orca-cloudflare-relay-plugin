@@ -43,7 +43,7 @@ test('relay updates: newer bundled Worker, or a protocol the bridge no longer sp
 
 function fakeOrca(settings) {
   const handlers = new Map()
-  const values = new Map(Object.entries(settings))
+  const values = new Map(Object.entries({ localPort: 6768, ...settings }))
   const store = new Map()
   const calls = []
   return {

@@ -1,7 +1,4 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import test from 'node:test'
 import {
   createCloudflareClient,
@@ -10,27 +7,31 @@ import {
   zoneCandidates
 } from '../src/cloudflare-api.mjs'
 import { cloudflaredAsset } from '../src/cloudflared-binary.mjs'
-import { findOrcaWebSocketPort, orcaCliCandidates, parseCliJson, portFromRuntimeMetadata } from '../src/orca-runtime.mjs'
+import { findOrcaWebSocketPort, orcaCliCandidates, parseCliJson, portFromEndpoint } from '../src/orca-runtime.mjs'
 import { qrSvg } from '../src/qr.mjs'
 import { buildCloudflaredArgs, isConnectedLine, parseQuickTunnelHost } from '../src/tunnel-process.mjs'
 
-test('reads the desktop WebSocket port from runtime metadata', () => {
-  assert.equal(
-    portFromRuntimeMetadata({ transports: [{ kind: 'unix', endpoint: '/x.sock' }, { kind: 'websocket', endpoint: 'ws://0.0.0.0:6768' }] }),
-    6768
-  )
-  assert.equal(portFromRuntimeMetadata({ transport: { kind: 'websocket', endpoint: 'ws://127.0.0.1:6771' } }), 6771)
-  assert.equal(portFromRuntimeMetadata({ transports: [] }), null)
+test('reads the port of a ws:// endpoint', () => {
+  assert.equal(portFromEndpoint('ws://127.0.0.1:6771'), 6771)
+  assert.equal(portFromEndpoint('wss://example.com'), 443)
+  assert.equal(portFromEndpoint('https://example.com:80'), null)
+  assert.equal(portFromEndpoint(undefined), null)
 })
 
-test('port discovery falls back from setting to runtime file to fallback file to default', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'orca-cf-'))
-  assert.deepEqual(await findOrcaWebSocketPort({ userDataDir: dir }), { port: 6768, source: 'default' })
-  await writeFile(join(dir, 'mobile-ws-fallback-port.json'), JSON.stringify({ port: 6772 }))
-  assert.deepEqual(await findOrcaWebSocketPort({ userDataDir: dir }), { port: 6772, source: 'fallback' })
-  await writeFile(join(dir, 'orca-runtime.json'), JSON.stringify({ transports: [{ kind: 'websocket', endpoint: 'ws://0.0.0.0:6770' }] }))
-  assert.deepEqual(await findOrcaWebSocketPort({ userDataDir: dir }), { port: 6770, source: 'runtime' })
-  assert.deepEqual(await findOrcaWebSocketPort({ userDataDir: dir, override: 7000 }), { port: 7000, source: 'setting' })
+test('port discovery asks Orca through its CLI, never Orca\'s files: setting, then orca pair, then default', async () => {
+  const calls = []
+  const run = async (cli, args) => {
+    calls.push(args)
+    return { code: 0, stdout: JSON.stringify({ ok: true, result: { available: true, endpoint: 'ws://127.0.0.1:6770', pairingUrl: 'orca://pair?code=x' } }) }
+  }
+  assert.deepEqual(await findOrcaWebSocketPort({ override: 7000, cli: '/orca', run }), { port: 7000, source: 'setting' })
+  assert.equal(calls.length, 0)
+  assert.deepEqual(await findOrcaWebSocketPort({ cli: '/orca', run }), { port: 6770, source: 'orca' })
+  assert.deepEqual(calls[0], ['pair', '--mobile', '--address', '127.0.0.1', '--json'])
+  assert.ok(!calls[0].includes('--rotate'), 'must not replace a code that is on screen')
+  const failing = async () => { throw new Error('no Orca') }
+  assert.deepEqual(await findOrcaWebSocketPort({ cli: '/orca', run: failing }), { port: 6768, source: 'default' })
+  assert.deepEqual(await findOrcaWebSocketPort({}), { port: 6768, source: 'default' })
 })
 
 test('finds the CLI bundled next to the Orca executable first', () => {
