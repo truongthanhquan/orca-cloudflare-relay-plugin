@@ -138,7 +138,12 @@ labeled **Advanced:**.
 - **Saved token:** if a Cloudflare token is saved and still valid (checked with Cloudflare's
   verify endpoint, which changes nothing), the create and paste steps collapse to
   "✓ Using your saved token" with a **Use a different token** link. After a Worker deploy the
-  token is forgotten by default, so you only see the token steps again when you redeploy.
+  token is kept (encrypted) by default, so updating the relay doesn't ask for it again.
+- **Plugin not answering:** if the plugin's background process doesn't answer the panel (Orca is
+  starting, reloading or updating it, or it is stuck), the panel says so after a few seconds
+  instead of staying blank. It shows the reason, any update the status bar mentions, and what to
+  do (wait, install the update, or turn the plugin off and on in Settings → Plugins), and keeps
+  retrying by itself.
 - **Errors that need setup:** for example "not set up yet", "relay Worker out of date" or "relay
   does not recognise this desktop". The setup card is highlighted, opens by itself, and a
   **Fix in setup** button jumps to it.
@@ -211,7 +216,7 @@ Manual setup never gives the plugin API access to your Cloudflare account.
 
 | Connection type | Automatic (the plugin uses a token) | Manual (you do it in Cloudflare) |
 | --- | --- | --- |
-| **Worker relay** | **Create token** opens Cloudflare with Workers Scripts · Edit pre-filled. Paste the token, and the plugin deploys the Worker and forgets the token. | Deploy `worker/` with the **Deploy to Cloudflare** button or `npx wrangler deploy`, then paste the Worker URL. Optionally add a `RELAY_ADMIN_TOKEN` secret to restrict registration. |
+| **Worker relay** | **Create token** opens Cloudflare with Workers Scripts · Edit pre-filled. Paste the token, and the plugin deploys the Worker and keeps the token (encrypted) for later updates, unless you turn off **Keep the Cloudflare API token**. | Deploy `worker/` with the **Deploy to Cloudflare** button or `npx wrangler deploy`, then paste the Worker URL. Optionally add a `RELAY_ADMIN_TOKEN` secret to restrict registration. |
 | **Tunnel on your domain** | **Create token** opens Cloudflare with Cloudflare Tunnel · Edit, DNS · Edit and Zone · Read pre-filled; check the summary lists all three. The plugin checks the token read-only first and names any missing permission before creating anything. Then it creates the tunnel, route and DNS record. | Create the tunnel in Cloudflare (**Networks → Tunnels → Create a tunnel → Cloudflared**), add a public hostname with service `HTTP → 127.0.0.1:6768`, then paste the install command or its token. The plugin only runs `cloudflared` with that tunnel token. |
 | **Quick tunnel** | Nothing to set up. | n/a |
 | **Your own address** (advanced) | n/a | You run any tunnel or reverse proxy with TLS that forwards to `http://127.0.0.1:6768`, such as your own `cloudflared` service. Enter its `wss://` address. The plugin starts nothing; every minute it checks that the address reaches this Orca, and uses it in the pairing QR code. |
@@ -271,8 +276,8 @@ The plugin does that part.
 - **How it updates:** a redeploy keeps the same host id and keys, so **phones stay paired**.
 - **The "Relay Worker updates" setting** decides what deploys without asking: nothing (the
   default: the panel asks and you click **Update relay**), required updates only, or all
-  updates. The automatic choices are opt-in and need a Cloudflare token kept on this computer
-  ("Keep the Cloudflare API token").
+  updates. The automatic choices are opt-in and use the Cloudflare token kept on this computer
+  ("Keep the Cloudflare API token", on by default).
 - **Deploy-button relays** update from your GitHub copy, not from the plugin.
 
 **Phones stay paired through updates.** A paired phone dials
@@ -344,8 +349,8 @@ plugin author: the relay runs in your own Cloudflare account.
 - **Secrets** (Cloudflare API token, tunnel token, relay key and admin or owner token) live in
   Orca's plugin secret store, which is encrypted with the OS key store. Where Orca reports none
   (`secrets.protection` is `unavailable`, such as Linux without a keyring), setup stops and says
-  so rather than store them some other way. The API token is deleted right after setup unless you turn on
-  **Keep the Cloudflare API token**.
+  so rather than store them some other way. The API token is kept after setup, so updates don't ask for it
+  again; turn off **Keep the Cloudflare API token** to delete it right after each deploy.
 - **Plugin storage and settings** hold only non-secret state: the connection type, the Worker
   URL and host id, the tunnel id and hostname, and the names you gave phones. A phone key's
   secret is never stored on the desktop: only the phone keeps it, and the relay keeps its SHA-256.
@@ -395,7 +400,7 @@ protections.
 | Flooding your Orca or your free quota | Orca exempts loopback from its per-source limits, so the relay enforces its own: 12 new phone connections per minute per IP, at most 4 concurrent connections per IP and 16 per desktop, and a 10-second first-frame deadline (Orca then gives a connection 10 seconds to authenticate). At most 64 KiB may be buffered before the desktop answers, and 1 MiB while the local connection opens. The bridge opens a local connection to Orca only after a valid v2 hello arrives. |
 | Probing whether you are online | The phone URL answers nothing without a WebSocket upgrade. Malformed phone addresses are refused before they reach the Durable Object, so junk traffic uses less of your quota. |
 | A lost phone, or one you no longer trust (Worker relay 1.3.0+) | Each phone pairs on its own key (a 128-bit secret only the phone holds; the Worker stores its SHA-256). **Remove** deletes the key and closes that phone's connection at once, without touching other phones. Only this desktop's key can add, list or remove phone keys. Unscanned codes' keys are deleted. |
-| A stolen Cloudflare API token | The token is needed only to deploy, so it is **deleted after deploy** by default. The setting is "Keep the Cloudflare API token". You can also revoke it in Cloudflare right away. Removing setup without a token still forgets this desktop's relay key. |
+| A stolen Cloudflare API token | The token can edit every Worker in your account. It is kept only in Orca's encrypted secret store (OS keychain), never in settings, logs or process arguments, and sent only to `api.cloudflare.com`. To keep it off this computer, turn off "Keep the Cloudflare API token": it is then deleted right after each deploy. You can revoke it in Cloudflare at any time. Removing setup forgets it along with this desktop's relay key. |
 | Secrets on disk | All tokens and keys live in Orca's plugin secret store (OS keychain). None are in settings, logs or process arguments. |
 
 **Limits to be aware of:**

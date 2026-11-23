@@ -96,6 +96,8 @@ const KEYS = {
   adminToken: 'relayAdminToken',
   /** Highest published minimums seen: { plugin, relay }. Kept so going offline can't skip one. */
   required: 'required-versions',
+  /** What the panel can show even when this worker doesn't answer it (see saveNotice). */
+  notice: 'panel-notice',
   /** Names the person gave phones paired through per-phone keys: { [keyId]: { name } }. */
   phoneNames: 'phone-names'
 }
@@ -151,7 +153,7 @@ export default function activate(orca) {
       tunnelName: (typeof all.tunnelName === 'string' && all.tunnelName.trim()) || 'orca-desktop',
       workerName: (typeof all.workerName === 'string' && all.workerName.trim()) || 'orca-relay',
       autoStart: all.autoStart !== false,
-      keepApiToken: all.keepApiToken === true,
+      keepApiToken: all.keepApiToken !== false,
       relayFallback: all.relayFallback === true,
       localPort: Number(all.localPort) || 0,
       cloudflaredPath: typeof all.cloudflaredPath === 'string' ? all.cloudflaredPath.trim() : '',
@@ -472,8 +474,8 @@ export default function activate(orca) {
       ...(usingWorkerUrl ? { ownerClaimed: locksOwner(health) } : {})
     })
     if (health?.version) relayState = { version: health.version, protocol: health.protocol ?? 1, deployedBy: relay.deployedBy }
-    // Least privilege: the token can edit every Worker in the account and is only needed to
-    // deploy, so forget it unless the user asked to keep it (Cloudflare can also revoke it).
+    // Kept by default (encrypted in Orca's secret store) so updates don't ask for it again. It
+    // can edit every Worker in the account, so turning the setting off deletes it after deploy.
     if (!config.keepApiToken) await orca.secrets.delete(KEYS.apiToken)
   }
 
@@ -835,6 +837,28 @@ export default function activate(orca) {
   function publishUpdates() {
     orca.panels.post('updates', updatesView())
     renderStatusBar(currentStatus())
+    saveNotice()
+  }
+
+  /**
+   * The status bar can say "update" or "Update required" while the panel can't reach this worker
+   * (Orca reloading it, or the worker stuck). The panel reads this from the plugin's own storage
+   * then, so it can still say what is available and why the relay is off.
+   */
+  let lastNotice = null
+  function saveNotice() {
+    const plugin = updates.plugin
+    const relay = updates.relay
+    const notice = {
+      version: PLUGIN_VERSION,
+      plugin: plugin?.available ? { latest: plugin.latest, mandatory: Boolean(plugin.mandatory) } : null,
+      relay: relay?.available ? { deployed: relay.deployed, latest: relay.latest, mandatory: Boolean(relay.mandatory), viaButton: relay.deployedBy === 'button' } : null,
+      blocked: blockReason()
+    }
+    const text = JSON.stringify(notice)
+    if (text === lastNotice) return
+    lastNotice = text
+    saveState(KEYS.notice, { ...notice, savedAt: Date.now() }).catch(() => {})
   }
 
   /** Version of the deployed relay Worker, from its public health endpoint. */
@@ -906,6 +930,7 @@ export default function activate(orca) {
       if (idle) orca.storage.get(KEYS.enabled).then((on) => on === true && startInBackground()).catch(() => {})
     }
     renderStatusBar(currentStatus())
+    saveNotice()
   }
 
   /** Is a newer plugin published, and is this version still allowed? */

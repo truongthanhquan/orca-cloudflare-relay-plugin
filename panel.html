@@ -319,6 +319,22 @@
     </div>
 
     <!-- ===================== Normal view (after setup) ===================== -->
+    <p class="muted" id="loading">Loading…</p>
+
+    <div class="card attention hidden" id="load-card">
+      <p><b>The Cloudflare Relay plugin isn't answering this panel.</b></p>
+      <p class="muted" id="load-detail"></p>
+      <div id="load-notice"></div>
+      <p style="margin:10px 0 4px"><b>What to do</b></p>
+      <ol class="guide">
+        <li>Wait a moment: the panel keeps trying by itself. Or click <b>Try again</b>.</li>
+        <li id="load-step-update" class="hidden">Install the update: Orca <b>Settings → Plugins → Cloudflare Relay → Update</b>.</li>
+        <li>Restart the plugin: Orca <b>Settings → Plugins</b>, turn <b>Cloudflare Relay</b> off, then on again. Your setup and paired phones are kept.</li>
+        <li>Still like this? <a href="#" id="load-report">Report an issue</a> and include the reason above.</li>
+      </ol>
+      <div class="row"><button id="load-retry" class="primary">Try again</button></div>
+    </div>
+
     <div class="card hidden" id="status-card">
       <div class="row">
         <span id="badge" class="badge"><span class="dot"></span><span id="state">Loading…</span></span>
@@ -995,7 +1011,84 @@
         render()
         if (status.state === 'connected' && !wasConnected) loadPhonesSoon()
       })
-      request('status').then((result) => { applySnapshot(result); checkSavedToken() })
+      /*
+       * First load. The worker can be briefly unreachable (Orca starting, reloading or updating
+       * the plugin while this panel stays open): say so and keep retrying instead of showing a
+       * blank panel.
+       */
+      let loadTimer = null
+      let slowTimer = null
+      let loadTries = 0
+      let loaded = false
+      let loading = false
+      const ISSUES_URL = 'https://github.com/truongthanhquan/orca-cloudflare-relay-plugin/issues'
+
+      /** Plain words for why the worker didn't answer (Orca's request error codes). */
+      function whyNoAnswer(error) {
+        const text = String(error || '')
+        if (/timeout|timed out/i.test(text)) return 'It did not answer in time: it may be busy or stuck.'
+        if (/unavailable|not running|no worker/i.test(text)) return 'Its background process is not running right now (Orca may be starting, reloading or updating it).'
+        if (!text) return 'No answer yet.'
+        return `Orca said: ${text}`
+      }
+
+      /** What the worker last saved for this case: available updates and why the relay is off. */
+      async function showNotice() {
+        let notice = null
+        try { notice = await orca.storage.get('panel-notice') } catch {}
+        const box = $('load-notice')
+        box.replaceChildren()
+        const line = (text, className = 'muted') => { const p = document.createElement('p'); p.className = className; p.textContent = text; box.appendChild(p) }
+        if (notice && notice.blocked) line(`The relay is off: ${notice.blocked}`, 'error-text')
+        if (notice && notice.plugin) {
+          line(`${notice.plugin.mandatory ? 'Required update' : 'Update available'}: Cloudflare Relay ${notice.plugin.latest} (you have ${notice.version}).${notice.plugin.mandatory ? ' It fixes a known security problem.' : ''} Installing it often fixes this too.`)
+        }
+        if (notice && notice.relay) {
+          line(`Relay Worker ${notice.relay.latest} is available (yours is ${notice.relay.deployed}). ${notice.relay.viaButton ? 'Update it from your GitHub copy.' : 'Update it from this panel once it loads.'}`)
+        }
+        show($('load-step-update'), Boolean(notice && notice.plugin))
+      }
+
+      async function loadSnapshot() {
+        if (loading) return
+        loading = true
+        clearTimeout(loadTimer)
+        clearTimeout(slowTimer)
+        // Never a blank panel: if the worker is slow, explain while still waiting for it.
+        slowTimer = setTimeout(() => {
+          if (loaded) return
+          show($('loading'), false)
+          $('load-detail').textContent = 'Still waiting for it to answer…'
+          show($('load-card'), true)
+          showNotice()
+        }, 8000)
+        const result = await request('status', undefined, 20000)
+        loading = false
+        clearTimeout(slowTimer)
+        if (typeof result.configured === 'boolean') {
+          loaded = true
+          loadTries = 0
+          show($('loading'), false)
+          show($('load-card'), false)
+          applySnapshot(result)
+          if (snap.hasApiToken && !tokenState.checked) checkSavedToken()
+          return
+        }
+        loadTries += 1
+        if (!loaded) {
+          show($('loading'), false)
+          $('load-detail').textContent = whyNoAnswer(result.error)
+          show($('load-card'), true)
+          showNotice()
+        }
+        loadTimer = setTimeout(loadSnapshot, Math.min(30000, 1000 * 2 ** Math.min(loadTries, 5)))
+      }
+      $('load-report').addEventListener('click', (event) => { event.preventDefault(); external(ISSUES_URL) })
+      $('load-retry').addEventListener('click', () => withButton($('load-retry'), () => { loadTries = 0; return loadSnapshot() }))
+      // A worker that comes back (or was reloaded) announces its status: load everything again.
+      orca.plugin.on('status', () => { if (!loaded) loadSnapshot() })
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadSnapshot() })
+      loadSnapshot()
     </script>
   </body>
 </html>

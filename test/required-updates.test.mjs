@@ -110,6 +110,11 @@ test('a plugin version with a known security problem turns the relay off until i
     assert.match(status.status.message, /known security problem/)
     assert.equal(orca.bar.at(-1).text, 'Update required')
     assert.equal(orca.store.get('tunnel-enabled'), true, 'stays on for the person: resumes after the update')
+    // What the panel shows if it can't reach the worker: the update and why the relay is off.
+    const notice = orca.store.get('panel-notice')
+    assert.equal(notice.plugin.latest, '9.9.9')
+    assert.equal(notice.plugin.mandatory, true)
+    assert.match(notice.blocked, /known security problem/)
   })
   // Next start with GitHub unreachable: the stored minimum still blocks.
   const offline = { fetch: async () => { throw new Error('offline') } }

@@ -4,7 +4,7 @@
   "execution": "trusted-worker",
   "id": "cloudflare-relay",
   "name": "Cloudflare Relay",
-  "version": "2.8.1",
+  "version": "2.8.2",
   "description": "Connect Orca Mobile to this desktop from anywhere through your free Cloudflare account. After installing, click \"Set up relay\" (cloud icon) in the status bar (or run \"Set up / open panel\") and follow 3 steps. Phones pair with a normal QR code; no app changes needed. Not affiliated with Cloudflare.",
   "author": {
     "name": "truongthanhquan",
@@ -112,9 +112,9 @@
       {
         "key": "keepApiToken",
         "title": "Keep the Cloudflare API token on this computer",
-        "description": "Off (recommended): after the relay Worker is deployed the token is deleted from this computer, since it can edit every Worker in your account. You paste a token again only to redeploy or remove the relay. The tunnel on your domain always keeps its token to follow Orca's port.",
+        "description": "On (default): the token you paste during setup stays on this computer, encrypted in Orca's secret store, so updating or removing the relay doesn't ask for it again. It can edit every Worker in your account: turn this off to delete it right after each deploy (you then paste a token for each update), and revoke it in Cloudflare whenever you like. The tunnel on your domain always keeps its token to follow Orca's port.",
         "type": "boolean",
-        "default": false
+        "default": true
       },
       {
         "key": "hostname",

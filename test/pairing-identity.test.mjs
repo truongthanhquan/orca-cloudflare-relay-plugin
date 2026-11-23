@@ -55,6 +55,8 @@ function pluginCopy() {
   const secrets = new Map()
   const settings = new Map([['mode', 'worker'], ['keepApiToken', true], ['localPort', 6768]])
   return {
+    settingsMap: settings,
+    secretsMap: secrets,
     handlers,
     store,
     log: () => {},
@@ -174,4 +176,21 @@ test('disconnect all phones moves the relay to a new address that nothing switch
     const rekeyed = registrations.find((r) => r.hostId === old)
     assert.ok(rekeyed && rekeyed.key !== newKey && rekeyed.key !== 'k'.repeat(43), 'the old address gets a key nobody holds')
   })
+})
+
+test('the token pasted at setup is kept by default, and deleted after deploy when the setting is off', async () => {
+  for (const [keep, expected] of [[undefined, 'cf-token-for-tests'], [false, null]]) {
+    process.env.ORCA_CLOUDFLARE_RELAY_STATE_DIR = await mkdtemp(join(tmpdir(), 'orca-cf-state-'))
+    const cf = fakeCloudflare()
+    await withOffline(cf.fetchImpl, async () => {
+      const copy = pluginCopy()
+      if (keep === undefined) copy.settingsMap.delete('keepApiToken')
+      else copy.settingsMap.set('keepApiToken', keep)
+      await run(copy, async () => {
+        const result = await copy.handlers.get('setup')({ mode: 'worker', apiToken: 'cf-token-for-tests' })
+        assert.equal(result.ok, true, result.error)
+      })
+      assert.equal(copy.secretsMap.get('cloudflareApiToken') ?? null, expected, `keepApiToken=${keep}`)
+    })
+  }
 })
