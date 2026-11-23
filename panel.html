@@ -36,10 +36,6 @@
       .starting .dot { background: #e0a526; }
       .error .dot { background: var(--orca-destructive, #e5484d); }
       #plugin-update-cli { user-select: all; }
-      .phone-list { list-style: none; margin: 6px 0 10px; padding: 0; border: 1px solid var(--orca-border, rgba(127,127,127,.25)); border-radius: 8px; }
-      .phone-list li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 10px; }
-      .phone-list li + li { border-top: 1px solid var(--orca-border, rgba(127,127,127,.25)); }
-      .phone-list .when { white-space: nowrap; }
       code, .mono { font-family: var(--orca-font-mono, ui-monospace, monospace); font-size: 12px; word-break: break-all; }
       label.field { display: block; margin: 10px 0 4px; font-weight: 600; }
       input[type='text'], input[type='password'], select {
@@ -322,14 +318,13 @@
 
     <div class="card hidden" id="pair-card">
       <h2 id="pair-title">Pair Orca Mobile</h2>
-      <p class="muted" id="pair-intro">Scan in Orca Mobile (<b>Pair</b>). Paired phones appear in Orca's <b>Paired devices</b>.</p>
-      <ul id="pair-list" class="phone-list hidden"></ul>
+      <p class="muted" id="pair-intro">Scan the code in Orca Mobile (<b>Pair</b>). Pair as many phones as you like; to see them, open <b>Paired devices</b> on Orca's <b>Mobile</b> page.</p>
       <div class="pair-ui" id="main-pair"></div>
       <details id="pair-remove" style="margin-top:10px">
         <summary class="muted">Remove a phone, or lost one?</summary>
         <ol class="guide" style="margin-top:6px">
           <li>Open Orca's <b>Mobile</b> page (Orca's help calls it <b>Settings → Mobile</b>).</li>
-          <li>Under <b>Paired devices</b>, find the phone. Phones are named "Mobile" plus the date they paired, and <i>last seen</i> above helps tell them apart.</li>
+          <li>Under <b>Paired devices</b>, find the phone. Phones are named "Mobile" plus the date they paired.</li>
           <li>Remove it. Orca ends its access and closes its connections, including through this relay.</li>
         </ol>
         <p class="muted">The plugin can't remove a phone itself: Orca doesn't offer plugins a way to do that yet.</p>
@@ -364,11 +359,10 @@
     <template id="pair-template">
       <div class="row">
         <button class="primary pair-show">Show pairing QR code</button>
-        <button class="pair-hide hidden">Hide and invalidate</button>
+        <button class="pair-hide hidden">Done, hide code</button>
       </div>
       <div class="qr"></div>
-      <p class="pair-security muted hidden">🔒 Works once and disappears when your phone pairs; expires in <span class="pair-expiry"></span>. Treat it like a password.</p>
-      <p class="pair-done hidden">✅ <strong>Phone paired.</strong> <span class="muted">The code was used and removed. Your phone now connects through Cloudflare from anywhere.</span></p>
+      <p class="pair-security muted hidden">🔒 Works once and expires in <span class="pair-expiry"></span>. Treat it like a password. When your phone shows it is paired, click <b>Done, hide code</b>.</p>
       <p class="pair-hint muted hidden"></p>
       <p class="pair-error error-text"></p>
     </template>
@@ -400,40 +394,7 @@
 
       /* ================= Pairing widget (used in step 3 and the normal view) ================= */
       const pairUis = []
-      /** Phones Orca has paired (a count from the worker; null until known). */
-      let pairedPhones = null
-      let pairedPhoneList = []
-      function ago(ms) {
-        if (!ms) return ''
-        const s = Math.max(0, (Date.now() - ms) / 1000)
-        if (s < 90) return 'just now'
-        if (s < 3600) return `${Math.round(s / 60)} min ago`
-        if (s < 86400) return `${Math.round(s / 3600)} h ago`
-        return `${Math.round(s / 86400)} days ago`
-      }
-      const pairLabel = () => (pairedPhones > 0 ? 'Pair another phone' : 'Show pairing QR code')
-      function renderPairIntro() {
-        const n = pairedPhones || 0
-        $('pair-title').textContent = n > 0 ? 'Paired phones' : 'Pair Orca Mobile'
-        $('pair-intro').innerHTML = n > 0
-          ? `<b>${n} ${n === 1 ? 'phone is' : 'phones are'} paired</b> with this Orca. Add another one any time. To remove a phone you no longer use, revoke it under <b>Paired devices</b> on Orca's <b>Mobile</b> page.`
-          : 'Scan the code in Orca Mobile (<b>Pair</b>). Paired phones appear in Orca\'s <b>Paired devices</b>, and you can pair as many as you like.'
-        const list = $('pair-list')
-        list.textContent = ''
-        for (const phone of pairedPhoneList) {
-          const li = document.createElement('li')
-          const name = document.createElement('span')
-          name.textContent = phone.name
-          const when = document.createElement('span')
-          when.className = 'muted when'
-          when.textContent = `last seen ${ago(phone.lastSeenAt)}`
-          when.title = phone.pairedAt ? `Paired ${new Date(phone.pairedAt).toLocaleString()}` : ''
-          li.append(name, when)
-          list.appendChild(li)
-        }
-        show(list, pairedPhoneList.length > 0)
-        pairUis.forEach((ui) => ui.relabel())
-      }
+      const pairLabel = () => 'Show pairing QR code'
       function makePairUi(root) {
         root.appendChild($('pair-template').content.cloneNode(true))
         const q = (sel) => root.querySelector(sel)
@@ -441,7 +402,6 @@
         const ui = {
           clear(reason) {
             clearInterval(timer)
-            show(q('.pair-done'), false)
             q('.qr').innerHTML = ''
             show(q('.pair-security'), false)
             show(q('.pair-hide'), false)
@@ -449,12 +409,6 @@
             q('.pair-error').textContent = reason ? `Code invalidated: ${reason}.` : ''
           },
           showing: () => q('.qr').innerHTML !== '',
-          paired() {
-            ui.clear()
-            show(q('.pair-done'), true)
-            q('.pair-show').textContent = 'Pair another phone'
-          },
-          relabel() { if (!ui.showing()) q('.pair-show').textContent = pairLabel() },
           /** Disabled with a reason, so a greyed-out button never leaves the person guessing. */
           setEnabled(enabled, why = '') {
             q('.pair-show').disabled = !enabled
@@ -467,7 +421,6 @@
           const result = await request('pair')
           if (!result.ok) { q('.pair-error').textContent = result.error; return }
           for (const other of pairUis) if (other !== ui) other.clear()
-          show(q('.pair-done'), false)
           q('.qr').innerHTML = result.svg
           show(q('.pair-security'), true)
           show(q('.pair-hide'), true)
@@ -482,7 +435,7 @@
           timer = setInterval(tick, 1000)
         }))
         q('.pair-hide').addEventListener('click', () => withButton(q('.pair-hide'), async () => {
-          ui.clear('you hid it')
+          ui.clear()
           await request('invalidate-pairing')
         }))
         pairUis.push(ui)
@@ -491,13 +444,6 @@
       makePairUi($('w3-pair'))
       makePairUi($('main-pair'))
       orca.plugin.on('pairing-invalidated', (payload) => pairUis.forEach((ui) => ui.clear(payload && payload.reason)))
-      // Only the widget that showed the code says "paired"; the other just drops any stale code.
-      orca.plugin.on('pairing-complete', (payload) => {
-        pairedPhones = payload && typeof payload.pairedPhones === 'number' ? payload.pairedPhones : (pairedPhones || 0) + 1
-        if (payload && Array.isArray(payload.pairedPhoneList)) pairedPhoneList = payload.pairedPhoneList
-        pairUis.forEach((ui) => (ui.showing() ? ui.paired() : ui.clear()))
-        renderPairIntro()
-      })
 
       /* ================= Rendering ================= */
       function render() {
@@ -637,11 +583,6 @@
           $('relay-fallback').checked = settings.relayFallback === true
         }
         if (next.updates) renderUpdates(next.updates)
-        if (typeof next.pairedPhones === 'number') {
-          pairedPhones = next.pairedPhones
-          pairedPhoneList = Array.isArray(next.pairedPhoneList) ? next.pairedPhoneList : []
-          renderPairIntro()
-        }
         renderAbout(snap.about)
         render()
       }

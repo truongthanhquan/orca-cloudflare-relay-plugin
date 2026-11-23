@@ -12,16 +12,11 @@ import { CustomEndpoint, normalizeCustomEndpoint } from './custom-endpoint.mjs'
 import { ensureCloudflared } from './cloudflared-binary.mjs'
 import { readFileSync } from 'node:fs'
 import {
-  countPairedPhones,
-  pairedPhoneList,
   createMobilePairingOffer,
   findOrcaCli,
   findOrcaWebSocketPort,
   findOwnPluginKey,
   openPluginPanel,
-  pairingDeviceToken,
-  pairingRowFor,
-  readDeviceRegistry,
   runPluginUpdate
 } from './orca-runtime.mjs'
 import {
@@ -75,8 +70,6 @@ export function withoutUndefined(value) {
 }
 
 export const PAIRING_CODE_TTL_MS = 5 * 60_000
-/** How often a shown code checks whether a phone has used it. */
-const PAIRING_WATCH_INTERVAL_MS = 1500
 const MODES = ['worker', 'named', 'quick', 'custom']
 const KEYS = {
   enabled: 'tunnel-enabled',
@@ -342,12 +335,6 @@ export default function activate(orca) {
     await invalidatePairingCode('the relay stopped')
   }
 
-  /** Paired phones for the panel: the count and names/dates only (no tokens or device ids). */
-  async function pairedPhonesView() {
-    const rows = await readDeviceRegistry().catch(() => [])
-    return { pairedPhones: countPairedPhones(rows), pairedPhoneList: pairedPhoneList(rows) }
-  }
-
   async function snapshot() {
     const config = await settings()
     const named = await orca.storage.get(KEYS.named)
@@ -365,7 +352,6 @@ export default function activate(orca) {
       orcaCliFound: Boolean(findOrcaCli({ override: config.orcaCliPath || undefined })),
       links: { createToken: TOKEN_TEMPLATE_URL, createTunnelToken: TUNNEL_TOKEN_TEMPLATE_URL, deployButton: DEPLOY_BUTTON_URL },
       updates: updatesView(),
-      ...(await pairedPhonesView()),
       version: PLUGIN_VERSION,
       about: aboutInfo()
     }
@@ -639,51 +625,28 @@ export default function activate(orca) {
       relayFallback: config.relayFallback,
       rotate: true
     })
-    stopWatchingCode()
+    clearCodeTimer()
     const expiresAt = Date.now() + PAIRING_CODE_TTL_MS
     shownCode = {
       endpoint: status.endpoint,
       timer: setTimeout(() => {
         invalidatePairingCode('the pairing code expired').catch((error) => log(`Could not invalidate the pairing code: ${errorMessage(error)}`))
-      }, PAIRING_CODE_TTL_MS),
-      watch: null
+      }, PAIRING_CODE_TTL_MS)
     }
     shownCode.timer.unref?.()
-    watchForPairing(shownCode, pairingDeviceToken(offer.pairingUrl))
     // The panel gets the QR image only; the link itself never leaves this process.
     return { endpoint: offer.endpoint, connectionMode: offer.connectionMode, expiresAt, svg: qrSvg(offer.pairingUrl) }
   }
 
-  function stopWatchingCode() {
+  function clearCodeTimer() {
     clearTimeout(shownCode?.timer)
-    clearInterval(shownCode?.watch)
-  }
-
-  /**
-   * Takes the code off the screen as soon as a phone signs in with it: from then on Orca's
-   * single-use ticket belongs to that phone, and nothing on screen is worth photographing.
-   */
-  function watchForPairing(code, deviceToken) {
-    if (!deviceToken) return
-    let deviceId = null
-    code.watch = setInterval(async () => {
-      const row = pairingRowFor(await readDeviceRegistry(), deviceId ? { deviceId } : { deviceToken })
-      if (shownCode !== code || !row) return
-      deviceId = row.deviceId
-      if (!row.paired) return
-      stopWatchingCode()
-      shownCode = null
-      log('A phone paired through Cloudflare Relay; the pairing code was removed from the screen.')
-      orca.panels.post('pairing-complete', await pairedPhonesView())
-    }, PAIRING_WATCH_INTERVAL_MS)
-    code.watch.unref?.()
   }
 
   /** Replaces the unused code on screen with one nobody has seen, so a photo of it is useless. */
   async function invalidatePairingCode(reason) {
     if (!shownCode) return
     const { endpoint } = shownCode
-    stopWatchingCode()
+    clearCodeTimer()
     shownCode = null
     orca.panels.post('pairing-invalidated', { reason })
     const config = await settings()

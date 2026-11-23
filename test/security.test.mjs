@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import test from 'node:test'
-import { pairingDeviceToken, pairingRowFor } from '../src/orca-runtime.mjs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { registerRelayHost } from '../src/worker-deploy.mjs'
 import { splice } from '../src/worker-relay-bridge.mjs'
 
@@ -47,24 +47,12 @@ test('splice delivers queued frames in order once the other side opens', () => {
   assert.deepEqual(local.sent, ['hello', 'a', 'b'])
 })
 
-const fakePairingUrl = (offer) => `orca://pair?code=${Buffer.from(JSON.stringify(offer)).toString('base64url')}`
-
-test('reads the one-time device token from a pairing link', () => {
-  assert.equal(pairingDeviceToken(fakePairingUrl({ v: 2, endpoint: 'wss://x', deviceToken: 'tok' })), 'tok')
-  assert.equal(pairingDeviceToken('orca://pair?code=not-json'), null)
-  assert.equal(pairingDeviceToken('nonsense'), null)
-})
-
-test('notices when a phone has signed in with the shown code (without exposing the token)', () => {
-  const rows = [
-    { deviceId: 'old', token: 'other', name: 'Old phone', lastSeenAt: 5 },
-    { deviceId: 'new', token: 'tok', name: 'Mobile', lastSeenAt: 0 }
-  ]
-  assert.deepEqual(pairingRowFor(rows, { deviceToken: 'tok' }), { deviceId: 'new', name: 'Mobile', paired: false })
-  // After the ticket exchange the token changes, so later checks go by device id.
-  rows[1] = { deviceId: 'new', token: 'replaced', name: 'Mobile', lastSeenAt: 99 }
-  assert.deepEqual(pairingRowFor(rows, { deviceId: 'new' }), { deviceId: 'new', name: 'Mobile', paired: true })
-  assert.equal(pairingRowFor(rows, { deviceToken: undefined }), null)
+test('never reads Orca\'s device credentials or decodes pairing codes', () => {
+  const files = ['panel.html', ...readdirSync('src').filter((f) => f.endsWith('.mjs')).map((f) => `src/${f}`)]
+  for (const file of files) {
+    const source = readFileSync(file, 'utf8')
+    assert.doesNotMatch(source, /orca-devices|deviceToken/, file)
+  }
 })
 
 test('registration explains a Deploy-button Worker that belongs to another desktop', async () => {
@@ -73,21 +61,4 @@ test('registration explains a Deploy-button Worker that belongs to another deskt
     registerRelayHost({ workerUrl: 'https://r.example.workers.dev', hostId: 'h'.repeat(22), hostKey: 'k'.repeat(43), adminToken: 'o'.repeat(43), fetchImpl }),
     /already belongs to another Orca desktop/
   )
-})
-
-test('the paired phone list shows names and dates only, never tokens or device ids', async () => {
-  const { countPairedPhones, pairedPhoneList } = await import('../src/orca-runtime.mjs')
-  const rows = [
-    { deviceId: 'd1', token: 'secret-1', name: 'Old phone', scope: 'mobile', pairedAt: 1, lastSeenAt: 10 },
-    { deviceId: 'd2', token: 'secret-2', name: 'New phone', scope: 'mobile', pairedAt: 2, lastSeenAt: 20 },
-    { deviceId: 'd3', token: 'secret-3', name: 'Unused code', scope: 'mobile', lastSeenAt: 0 },
-    { deviceId: 'd4', token: 'secret-4', name: 'Laptop Orca', scope: 'runtime', lastSeenAt: 30 }
-  ]
-  assert.equal(countPairedPhones(rows), 2)
-  const list = pairedPhoneList(rows)
-  assert.deepEqual(list, [
-    { name: 'New phone', pairedAt: 2, lastSeenAt: 20 },
-    { name: 'Old phone', pairedAt: 1, lastSeenAt: 10 }
-  ])
-  assert.doesNotMatch(JSON.stringify(list), /secret|d1|d2/)
 })

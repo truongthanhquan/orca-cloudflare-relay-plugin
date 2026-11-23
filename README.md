@@ -147,16 +147,16 @@ in Orca's device registry like a LAN phone. It appears under **Paired devices** 
 connected, as "Mobile <date>", and can be renamed or revoked there. Revoking ends its relay
 connections too. Unused pairing codes never show up in that list.
 
-The plugin's panel shows the same phones, read-only: a **Paired phones** card with each phone's
-name and when it was last seen, plus a **Pair another phone** button. Stale phones stand out
-there. When the relay isn't connected, the card says why the button is waiting.
+The plugin doesn't read Orca's device list (it holds each phone's credentials, and Orca has no
+plugin API for it), so the panel points you to **Paired devices** on Orca's **Mobile** page. Its
+pairing card shows a new code whenever you want one; when the relay isn't connected, it says why
+the button is waiting.
 
 **Removing a phone** happens in Orca, because Orca offers plugins no supported way to revoke one
 (no host API method and no CLI command). The card's **Remove a phone, or lost one?** section
 walks you through it:
 1. Open Orca's **Mobile** page (Orca's help calls it **Settings → Mobile**).
-2. Under **Paired devices**, find the phone ("Mobile" plus the date it paired; *last seen* in the
-   panel helps tell them apart).
+2. Under **Paired devices**, find the phone ("Mobile" plus the date it paired).
 3. Remove it. Orca ends its access and closes its connections, including through this relay.
 
 **Lost a phone and can't tell which entry it is?** With the Worker relay, **Disconnect all phones
@@ -328,10 +328,9 @@ plugin author: the relay runs in your own Cloudflare account.
   Linux): each relay Worker URL and the host id this computer registered on it, so a reinstall
   or another copy of the plugin keeps the address paired phones use. Nothing secret: the host id
   is already in every pairing code. The file is readable only by you.
-- **Read-only:** Orca's `orca-runtime.json` (to find Orca's port) and `orca-devices.json` (to
-  notice that a phone used the code on screen, so the code can be removed, and to list paired
-  phones in the panel: names and dates only, never tokens or device ids). The plugin never
-  writes to Orca's files, and pairing secrets are never logged or sent to the panel.
+- **Read-only:** Orca's `orca-runtime.json`, only to find the local port Orca listens on. The
+  plugin never reads Orca's device list or any other Orca file, never writes to Orca's files,
+  and pairing secrets are never logged or sent to the panel.
 
 **Removing it:** **Remove setup** deletes what it created in Cloudflare (when it still has a
 token) and forgets every secret. Uninstalling the plugin then leaves only the cache folder and
@@ -357,7 +356,7 @@ protections.
 | Risk | Protection |
 | --- | --- |
 | Replaying recorded traffic (legacy E2EE v1 has no per-session desktop nonce) | The bridge refuses any connection whose first frame is not an **E2EE v2** hello. v2 binds fresh nonces from both sides, so recorded sessions cannot be replayed. This is the rule Orca's own relay enforces (`requireV2`). Orca never sees a refused connection. |
-| A leaked or photographed QR code | Codes are **single use**: Orca swaps the code for the phone's own credential at first sign-in. The code **disappears from the screen the moment your phone pairs**. Every **Show** makes a new code and cancels the previous one. An unused code is **invalidated after 5 minutes**, on **Hide and invalidate**, or when the relay stops. The pairing link itself never leaves the plugin process; the panel only receives the QR image. |
+| A leaked or photographed QR code | Codes are **single use**: Orca swaps the code for the phone's own credential at first sign-in. Every **Show** makes a new code and cancels the previous one. A code is **invalidated after 5 minutes**, on **Done, hide code**, or when the relay stops. The pairing link itself never leaves the plugin process; the panel only receives the QR image. |
 | Someone else attaching as your desktop | Each desktop has a 128-bit random host id and a 256-bit secret key. The key is sent only in the `Authorization` header over TLS, never in a URL. The Worker stores only a SHA-256 of it and compares in constant time. Registering a host id needs the admin secret the plugin deploys. |
 | Strangers using your Worker (and its free quota) as their own relay | A plugin-deployed Worker accepts registrations only with its admin secret. A **Deploy-button** Worker has no admin secret, so the first desktop to register **locks it to that desktop's owner token**; anyone else gets "belongs to another Orca desktop". Relays set up before 1.2.0 are locked automatically once the Worker is updated. |
 | Flooding your Orca or your free quota | Orca exempts loopback from its per-source limits, so the relay enforces its own: 12 new phone connections per minute per IP, at most 4 concurrent connections per IP and 16 per desktop, and a 10-second first-frame deadline (Orca then gives a connection 10 seconds to authenticate). At most 64 KiB may be buffered before the desktop answers, and 1 MiB while the local connection opens. The bridge opens a local connection to Orca only after a valid v2 hello arrives. |
