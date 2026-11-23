@@ -253,3 +253,30 @@ test('with an older relay Worker, pairing keeps the shared address and the panel
     assert.match(removed.error, /Update relay/)
   })
 })
+
+test('a code replaced after a phone used it is reported as used, even when the connect event was missed', async () => {
+  const relay = fakeRelay()
+  const ws = fakeSockets()
+  const { cli, addresses } = await fakeCli()
+  const copy = pluginCopy({ cli })
+  await session({ relay, copy, ws }, async () => {
+    await copy.handlers.get('pair')({})
+    const id = (await addresses())[0].split('/').at(-1).split('.')[0]
+    // The relay saw the phone, but no 'open' reached this desktop.
+    relay.phones.get(id).firstSeen = Date.now()
+    await copy.handlers.get('invalidate-pairing')()
+    await wait(50)
+    const last = copy.posts.filter((p) => p.name === 'pairing-invalidated').at(-1)
+    assert.deepEqual(last.payload, { reason: 'hidden', used: true, known: true })
+    assert.equal(relay.phones.has(id), true, 'the paired phone keeps its key')
+
+    await copy.handlers.get('pair')({})
+    const unused = (await addresses()).at(-1).split('/').at(-1).split('.')[0]
+    await copy.handlers.get('invalidate-pairing')()
+    await wait(50)
+    const next = copy.posts.filter((p) => p.name === 'pairing-invalidated').at(-1)
+    assert.deepEqual(next.payload, { reason: 'hidden', used: false, known: true })
+    for (let i = 0; i < 50 && relay.phones.has(unused); i += 1) await wait(20)
+    assert.equal(relay.phones.has(unused), false, 'an unused key is dropped')
+  })
+})

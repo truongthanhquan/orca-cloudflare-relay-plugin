@@ -411,6 +411,7 @@
       <p class="pair-security muted hidden">🔒 Works once and expires in <span class="pair-expiry"></span>. Treat it like a password. When your phone shows it is paired, click <b>Done, hide code</b>.</p>
       <p class="pair-done ok hidden">✓ A phone connected with this code. Finish pairing on the phone; it then shows in the list.</p>
       <p class="pair-hint muted hidden"></p>
+      <p class="pair-note muted hidden"></p>
       <p class="pair-error error-text"></p>
     </template>
 
@@ -442,21 +443,60 @@
       /* ================= Pairing widget (used in step 3 and the normal view) ================= */
       const pairUis = []
       const pairLabel = () => 'Show pairing QR code'
+      const UNSURE_EXPIRED = 'This code expired. If your phone already shows it is paired, you are done: nothing else to do. Otherwise click Show pairing QR code for a new one.'
       function makePairUi(root) {
         root.appendChild($('pair-template').content.cloneNode(true))
         const q = (sel) => root.querySelector(sel)
         let timer = null
+        const note = (text) => { q('.pair-note').textContent = text || ''; show(q('.pair-note'), Boolean(text)) }
+        const hideCode = () => {
+          clearInterval(timer)
+          q('.qr').innerHTML = ''
+          show(q('.pair-security'), false)
+          show(q('.pair-hide'), false)
+        }
         const ui = {
-          clear(reason) {
-            clearInterval(timer)
-            // After a phone connected, the code expiring later is expected: keep the success note.
-            if (reason && !ui.showing() && !q('.pair-done').classList.contains('hidden')) return
+          /** Hides the code. With no reason the person hid it; nothing more to say. */
+          clear() {
+            hideCode()
             show(q('.pair-done'), false)
-            q('.qr').innerHTML = ''
-            show(q('.pair-security'), false)
-            show(q('.pair-hide'), false)
+            note('')
+            q('.pair-error').textContent = ''
             q('.pair-show').textContent = pairLabel()
-            q('.pair-error').textContent = reason ? `Code invalidated: ${reason}.` : ''
+          },
+          /**
+           * The plugin replaced the code. A phone that used it before is a success, never an error,
+           * and a code that is no longer on screen needs no message at all.
+           */
+          invalidated({ reason, used, known } = {}) {
+            const wasShowing = ui.showing() || q('.pair-note').dataset.expired === '1'
+            if (used) {
+              if (wasShowing) ui.connected(true)
+              return
+            }
+            if (!wasShowing) return
+            ui.clear()
+            q('.pair-note').dataset.expired = ''
+            if (reason === 'expired') {
+              note(known
+                ? 'This code expired before a phone used it. Click Show pairing QR code for a new one.'
+                : UNSURE_EXPIRED)
+            } else if (reason === 'stopped') {
+              q('.pair-error').textContent = 'The relay stopped, so this code no longer works. Start it again, then show a new code.'
+            } else if (reason === 'disconnected') {
+              note('Every phone was disconnected and the relay has a new address. Show a new code to pair a phone again.')
+            }
+          },
+          showing: () => q('.qr').innerHTML !== '',
+          /** A phone connected with the code on screen: hide it (it stays valid until it expires). */
+          connected(force = false) {
+            if (!ui.showing() && !force) return
+            hideCode()
+            note('')
+            q('.pair-note').dataset.expired = ''
+            q('.pair-error').textContent = ''
+            show(q('.pair-done'), true)
+            q('.pair-show').textContent = 'Pair another phone'
           },
           showing: () => q('.qr').innerHTML !== '',
           /** A phone connected with the code on screen: hide it (it stays valid until it expires). */
@@ -485,6 +525,8 @@
           for (const other of pairUis) if (other !== ui) other.clear()
           q('.pair-name').value = ''
           show(q('.pair-done'), false)
+          note('')
+          q('.pair-note').dataset.expired = ''
           // Our own QR SVG, generated in the plugin from the pairing link (no outside text in it).
           q('.qr').innerHTML = result.svg
           show(q('.pair-security'), true)
@@ -494,7 +536,17 @@
           const tick = () => {
             const left = Math.max(0, result.expiresAt - Date.now())
             q('.pair-expiry').textContent = `${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, '0')}`
-            if (left <= 0) ui.clear('it expired')
+            if (left <= 0) {
+              // The plugin says shortly whether a phone used it; until then, no alarm.
+              ui.clear()
+              q('.pair-note').dataset.expired = '1'
+              note('This code expired. Checking whether a phone used it…')
+              setTimeout(() => {
+                if (q('.pair-note').dataset.expired !== '1') return
+                q('.pair-note').dataset.expired = ''
+                note(UNSURE_EXPIRED)
+              }, 15000)
+            }
           }
           tick()
           timer = setInterval(tick, 1000)
@@ -508,7 +560,7 @@
       }
       makePairUi($('w3-pair'))
       makePairUi($('main-pair'))
-      orca.plugin.on('pairing-invalidated', (payload) => pairUis.forEach((ui) => ui.clear(payload && payload.reason)))
+      orca.plugin.on('pairing-invalidated', (payload) => pairUis.forEach((ui) => ui.invalidated(payload || {})))
       orca.plugin.on('pairing-connected', () => { pairUis.forEach((ui) => ui.connected()); loadPhonesSoon() })
 
       /* ================= Phones on this relay (Worker relay 1.3.0+) ================= */

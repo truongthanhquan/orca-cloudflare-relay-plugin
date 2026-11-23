@@ -250,12 +250,18 @@ export default function activate(orca) {
   // A phone connected on the key of the code on screen: it is pairing, so the panel can hide the
   // code (it stays valid until it expires, so a pairing in progress is never cut off).
   bridge.on('phone-open', (phoneId) => {
-    if (phoneId && shownCode?.phoneId === phoneId) orca.panels.post('pairing-connected', {})
+    if (phoneId && shownCode?.phoneId === phoneId) {
+      shownCode.used = true
+      orca.panels.post('pairing-connected', {})
+    }
     refreshPhonesSoon()
   })
   let lastPhoneCount = 0
   bridge.on('status', (status) => {
     if (status.phones !== lastPhoneCount) {
+      // Relays without per-phone keys can't say which phone arrived: one more phone while a code
+      // is on screen most likely used it, so its expiry later is not reported as a failure.
+      if (status.phones > lastPhoneCount && shownCode && !shownCode.phoneId) shownCode.used = true
       lastPhoneCount = status.phones
       refreshPhonesSoon()
     }
@@ -371,7 +377,7 @@ export default function activate(orca) {
   async function stopTunnel() {
     active.stop()
     await orca.storage.set(KEYS.enabled, false)
-    await invalidatePairingCode('the relay stopped')
+    await invalidatePairingCode('stopped')
   }
 
   async function snapshot() {
@@ -532,7 +538,7 @@ export default function activate(orca) {
     await rememberHostId(relay.workerUrl, hostId)
     // Every phone key lived on the old address, so the names go with it.
     await orca.storage.delete(KEYS.phoneNames)
-    await invalidatePairingCode('all phones were disconnected from the relay')
+    await invalidatePairingCode('disconnected')
     log('Disconnected every phone from the relay: it now has a new address. Pair the phones you keep again.')
     if ((await orca.storage.get(KEYS.enabled)) === true) {
       bridge.stop({ silent: true })
@@ -701,8 +707,9 @@ export default function activate(orca) {
     shownCode = {
       endpoint,
       phoneId,
+      used: false,
       timer: setTimeout(() => {
-        invalidatePairingCode('the pairing code expired').catch((error) => log(`Could not invalidate the pairing code: ${errorMessage(error)}`))
+        invalidatePairingCode('expired').catch((error) => log(`Could not invalidate the pairing code: ${errorMessage(error)}`))
       }, PAIRING_CODE_TTL_MS)
     }
     shownCode.timer.unref?.()
@@ -716,6 +723,17 @@ export default function activate(orca) {
     const relay = await orca.storage.get(KEYS.worker)
     const hostKey = await orca.secrets.get(KEYS.hostKey)
     return relay?.workerUrl && relay?.hostId && hostKey ? { workerUrl: relay.workerUrl, hostId: relay.hostId, hostKey } : null
+  }
+
+  /** Whether a phone ever connected with this key (the relay records it), in case the event was missed. */
+  async function keyWasUsed(id) {
+    try {
+      const relay = await phoneKeyRelay()
+      if (!relay) return false
+      return Boolean((await listPhoneKeys({ ...relay, timeoutMs: 5000 })).phones.find((entry) => entry.id === id)?.firstSeen)
+    } catch {
+      return false
+    }
   }
 
   /** Removes a phone key whose code was never used (a used one belongs to a paired phone). */
@@ -799,14 +817,20 @@ export default function activate(orca) {
     clearTimeout(shownCode?.timer)
   }
 
-  /** Replaces the unused code on screen with one nobody has seen, so a photo of it is useless. */
+  /**
+   * Replaces the code on screen with one nobody has seen, so a photo of it is useless.
+   * reason: 'expired' | 'hidden' | 'stopped' | 'disconnected'. The panel is also told whether a
+   * phone used the code, so an expiry after pairing reads as done, not as an error.
+   */
   async function invalidatePairingCode(reason) {
     if (!shownCode) return
     const { endpoint, phoneId } = shownCode
+    let used = shownCode.used
     clearCodeTimer()
     shownCode = null
-    if (phoneId) dropUnusedKey(phoneId)
-    orca.panels.post('pairing-invalidated', { reason })
+    if (phoneId && !used) used = await keyWasUsed(phoneId)
+    if (phoneId && !used) dropUnusedKey(phoneId)
+    orca.panels.post('pairing-invalidated', { reason, used, known: Boolean(phoneId) || used })
     const config = await settings()
     const cli = findOrcaCli({ override: config.orcaCliPath || undefined })
     if (!cli) return
@@ -1113,7 +1137,7 @@ export default function activate(orca) {
     return snapshot()
   })
   handle('invalidate-pairing', async () => {
-    await invalidatePairingCode('you hid the pairing code')
+    await invalidatePairingCode('hidden')
     return {}
   })
   handle('remove', async (input) => {
