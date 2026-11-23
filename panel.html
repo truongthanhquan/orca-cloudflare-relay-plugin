@@ -262,6 +262,7 @@
             <input id="tunnel-token" type="password" placeholder="cloudflared service install eyJh…" autocomplete="off" />
             <p class="muted hint" style="margin-top:6px">The plugin runs <code class="inline">cloudflared</code> with this tunnel token only; it never gets API access to your account.</p>
           </div>
+          <p class="muted hint download-note">The first start downloads Cloudflare's <code class="inline">cloudflared</code> 2026.11.1 from <code class="inline">github.com/cloudflare/cloudflared</code> into this plugin's cache folder, checks its SHA-256 against the value pinned in the plugin, and runs it only while the relay is on. To use your own copy instead, set <b>cloudflared path</b> in Settings.</p>
         </div>
 
         <!-- Your own address -->
@@ -274,6 +275,7 @@
         <!-- Quick tunnel -->
         <div id="w2-quick" class="hidden">
           <p class="muted">Quick tunnels need no account. Remember: the address changes whenever the tunnel restarts, so you pair again.</p>
+          <p class="muted hint download-note">The first start downloads Cloudflare's <code class="inline">cloudflared</code> 2026.11.1 from <code class="inline">github.com/cloudflare/cloudflared</code> into this plugin's cache folder, checks its SHA-256 against the value pinned in the plugin, and runs it only while the relay is on. To use your own copy instead, set <b>cloudflared path</b> in Settings.</p>
         </div>
 
         <p id="w2-progress" class="muted progress"></p>

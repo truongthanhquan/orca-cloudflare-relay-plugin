@@ -62,3 +62,11 @@ test('registration explains a Deploy-button Worker that belongs to another deskt
     /already belongs to another Orca desktop/
   )
 })
+
+test('the panel names the cloudflared version the plugin downloads, before it is downloaded', async () => {
+  const { CLOUDFLARED_VERSION } = await import('../src/cloudflared-binary.mjs')
+  const panel = readFileSync('panel.html', 'utf8')
+  const notes = panel.match(/class="muted hint download-note">[^\n]*/g) ?? []
+  assert.equal(notes.length, 2, 'one note for each tunnel mode')
+  for (const note of notes) assert.ok(note.includes(CLOUDFLARED_VERSION), note)
+})

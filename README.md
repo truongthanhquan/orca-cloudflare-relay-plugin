@@ -282,7 +282,8 @@ Orca → Paired devices.
 This plugin runs as an Orca **trusted worker** (Orca's "Full access" label): a Node process with
 your user's permissions. That is a lot of trust, so here is everything it does with it. The
 source is plain, unminified JavaScript in [`src/`](src/) and [`worker/src/`](worker/src/), with
-no dependencies besides a vendored MIT QR code generator.
+no dependencies besides a vendored, unmodified MIT QR code generator (`qrcode-generator` 2.0.2;
+see [`vendor/README.md`](vendor/README.md)).
 
 **Processes it starts**
 
@@ -296,7 +297,7 @@ no dependencies besides a vendored MIT QR code generator.
 | `tar -xzf` | macOS only, once, when it downloads `cloudflared` | Unpacks the downloaded `cloudflared` archive |
 | `ps -p <pid> -o comm=` | At startup, tunnel modes only | Stops a `cloudflared` this plugin left behind after a crash, and only if that pid really is `cloudflared` |
 
-The Worker relay mode starts no processes at all. It opens WebSockets from the plugin itself.
+Besides the `orca` CLI calls above, the Worker relay mode starts no processes. It opens WebSockets from the plugin itself.
 
 **Network connections**
 
