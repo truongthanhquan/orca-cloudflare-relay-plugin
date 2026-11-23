@@ -471,7 +471,7 @@ export default function activate(orca) {
       relayProtocol: health?.protocol ?? null,
       ...(usingWorkerUrl ? { ownerClaimed: locksOwner(health) } : {})
     })
-    if (health?.version) relayState = { version: health.version, protocol: health.protocol ?? 1 }
+    if (health?.version) relayState = { version: health.version, protocol: health.protocol ?? 1, deployedBy: relay.deployedBy }
     // Least privilege: the token can edit every Worker in the account and is only needed to
     // deploy, so forget it unless the user asked to keep it (Cloudflare can also revoke it).
     if (!config.keepApiToken) await orca.secrets.delete(KEYS.apiToken)
@@ -849,7 +849,7 @@ export default function activate(orca) {
     const stored = (await orca.storage.get(KEYS.required)) ?? {}
     required = { plugin: higherMinimum(required.plugin, stored.plugin), relay: higherMinimum(required.relay, stored.relay) }
     const relay = await orca.storage.get(KEYS.worker)
-    if (!relayState && relay?.relayVersion) relayState = { version: relay.relayVersion, protocol: relay.relayProtocol ?? 1 }
+    if (!relayState && relay?.relayVersion) relayState = { version: relay.relayVersion, protocol: relay.relayProtocol ?? 1, deployedBy: relay.deployedBy }
   }
 
   async function raiseRequired(info) {
@@ -871,12 +871,23 @@ export default function activate(orca) {
       return `This version of Cloudflare Relay (${PLUGIN_VERSION}) has a known security problem, so the relay is off. Update to ${required.plugin} or newer: click Update now in the Cloudflare Relay panel.`
     }
     if (currentMode !== 'worker' || !relayState?.version) return null
+    if (opensToAnyone(relayState)) {
+      return `Your relay Worker (${relayState.version}, deployed with the Deploy to Cloudflare button) lets any Orca desktop register, so other people could use it. The relay is off until you update the Worker to 1.2.0 or newer: redeploy it from your GitHub copy, or with the button again.`
+    }
     const relayRequired = belowMinimum(relayState.version, required.relay) || !(relayState.protocol >= MIN_RELAY_PROTOCOL)
     if (!relayRequired) return null
     if (belowMinimum(bundledRelayInfo().version, required.relay)) {
       return `The relay Worker in your Cloudflare account (${relayState.version}) has a known security problem, so the relay is off. Update the plugin first: it brings the fixed Worker.`
     }
     return `The relay Worker in your Cloudflare account (${relayState.version}) must be updated before it can be used again, so the relay is off. Click Update relay in the Cloudflare Relay panel (it keeps your phones paired).`
+  }
+
+  /**
+   * Deploy-button relays before 1.2.0 have no owner lock: any desktop that finds the URL can
+   * register and use them. (Plugin-deployed relays always required the admin secret.)
+   */
+  function opensToAnyone(state) {
+    return state?.deployedBy === 'button' && compareVersions(String(state.version ?? '0'), '1.2.0') < 0
   }
 
   /** Stops a running relay that became unsafe, and resumes it once the problem is fixed. */
@@ -958,7 +969,7 @@ export default function activate(orca) {
         return null
       })
       if (deployed) {
-        relayState = deployed
+        relayState = { ...deployed, deployedBy: relay.deployedBy }
         if (relay.relayVersion !== deployed.version) await saveState(KEYS.worker, { ...relay, relayVersion: deployed.version, relayProtocol: deployed.protocol })
         const evaluated = evaluateRelayUpdate({ deployed, bundled: bundledRelayInfo(), minProtocol: MIN_RELAY_PROTOCOL, minimum: required.relay })
         const keep = updates.relay?.latest === evaluated.latest && updates.relay?.deployed === evaluated.deployed
@@ -1044,6 +1055,17 @@ export default function activate(orca) {
   handle('stop', async () => {
     await exclusive(stopTunnel)
     return snapshot()
+  })
+  // The token a Deploy-button relay gets as RELAY_ADMIN_TOKEN: the same one this desktop then
+  // registers with, so only this desktop can use that relay. Shown only when the person asks.
+  handle('owner-token', async () => {
+    await requireSecretStore()
+    let token = await orca.secrets.get(KEYS.adminToken)
+    if (!token) {
+      token = randomSecret()
+      await orca.secrets.set(KEYS.adminToken, token)
+    }
+    return { token }
   })
   handle('pair', pairingOffer)
   handle('phones', phonesView)

@@ -241,11 +241,14 @@
           <div id="worker-manual" class="hidden">
             <p class="muted hint">Deploy the relay yourself; the plugin never sees your Cloudflare credentials.</p>
             <ol class="guide">
-              <li>Deploy the <code class="inline">worker/</code> folder: <button id="deploy-button" class="action">Deploy to Cloudflare</button><span class="muted hint">or run <code class="inline">npx wrangler deploy</code> in that folder.</span></li>
+              <li>Copy this desktop's owner token: <button id="owner-token-show" class="action">Show owner token</button>
+                <input id="owner-token" type="text" class="mono hidden" readonly aria-label="Owner token" />
+                <span class="muted hint" id="owner-token-note">When Cloudflare asks for <code class="inline">RELAY_ADMIN_TOKEN</code>, paste it. Then only this desktop can use the relay, even before you paste its URL here. Keep it private.</span></li>
+              <li>Deploy the <code class="inline">worker/</code> folder: <button id="deploy-button" class="action">Deploy to Cloudflare</button><span class="muted hint">or, in that folder, run <code class="inline">npx wrangler secret put RELAY_ADMIN_TOKEN</code> (paste the token) and <code class="inline">npx wrangler deploy</code>.</span></li>
               <li>Paste the Worker's URL:</li>
             </ol>
             <input id="worker-url" type="text" placeholder="https://orca-relay.you.workers.dev" autocomplete="off" />
-            <p class="muted hint" style="margin-top:6px">This desktop registers itself with the new relay. Add a <code class="inline">RELAY_ADMIN_TOKEN</code> secret to the Worker if you want to restrict registration.</p>
+            <p class="muted hint" style="margin-top:6px">Skipped the token? Then the first desktop to register claims the relay, so paste the URL here right after deploying.</p>
           </div>
         </div>
 
@@ -970,6 +973,18 @@
       $('create-token').addEventListener('click', () => external(links.createToken))
       $('relay-create-token').addEventListener('click', () => external(links.createToken))
       $('deploy-button').addEventListener('click', () => external(links.deployButton))
+      $('owner-token-show').addEventListener('click', () => withButton($('owner-token-show'), async () => {
+        const result = await request('owner-token', undefined, 20000)
+        if (!result.ok) { $('owner-token-note').textContent = result.error; return }
+        const field = $('owner-token')
+        field.value = result.token
+        show(field, true)
+        field.focus()
+        field.select()
+        let copied = false
+        try { await navigator.clipboard.writeText(result.token); copied = true } catch {}
+        $('owner-token-show').textContent = copied ? 'Copied ✓' : 'Selected: copy it'
+      }))
       $('open-tokens').addEventListener('click', () => external(links.createTunnelToken || 'https://dash.cloudflare.com/profile/api-tokens'))
       $('open-tunnels').addEventListener('click', () => external('https://one.dash.cloudflare.com/'))
 

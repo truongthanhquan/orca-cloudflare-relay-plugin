@@ -1,13 +1,13 @@
 {
   "schema": 1,
   "plugin": {
-    "latest": "2.8.0",
+    "latest": "2.8.1",
     "minimum": "2.1.0",
-    "notes": "2.8.0: with the Worker relay (after Update relay to 1.3.0), every phone you pair gets its own key: the panel lists your phones (name, connected now, last seen) and removes one phone from the relay without touching the others. 2.7.x: the plugin reads none of Orca's private files; relay redeploys only on click unless you opt in."
+    "notes": "2.8.1: no one else can use your relay Worker: a Deploy-button Worker that still lets any desktop register (before relay 1.2.0) is refused until updated, and the Deploy button now asks for this desktop's owner token so the relay is locked from the first second. 2.8.0: per-phone keys, so the panel lists your phones and removes one at a time."
   },
   "relay": {
-    "latest": "1.3.0",
+    "latest": "1.3.1",
     "minimum": "1.1.0",
-    "notes": "Relay 1.3.0: per-phone keys. Each phone pairs on its own address, so the desktop can list phones and remove one at a time; the shared address older phones use can be blocked. Update keeps your phones paired."
+    "notes": "Relay 1.3.1: a placeholder or short RELAY_ADMIN_TOKEN is ignored (it can never become your relay's key), and malformed phone addresses are refused before they use your Durable Object quota. 1.3.0: per-phone keys."
   }
 }

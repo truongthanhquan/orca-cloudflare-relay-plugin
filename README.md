@@ -75,11 +75,16 @@ Use it. Any account works, free or paid, and nothing existing is changed:
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/truongthanhquan/orca-cloudflare-relay-plugin/tree/main/worker)
 
-Deploy from GitHub, then paste the Worker URL into the plugin under **Already deployed with the
-"Deploy to Cloudflare" button?**. A button-deployed relay has no admin secret. The first desktop
-to register a host id claims it, and others cannot take it over. To restrict registration, add a
-`RELAY_ADMIN_TOKEN` secret in the Worker settings. Note that the in-plugin deploy sets this secret
-automatically.
+Before you click it, open **Setup → Worker relay → Manual** in the panel and click **Show owner
+token**. Cloudflare's deploy form asks for `RELAY_ADMIN_TOKEN`: paste that token. The relay then
+accepts only this desktop from the moment it exists. Then paste the Worker URL into the panel.
+With `npx wrangler deploy`, run `npx wrangler secret put RELAY_ADMIN_TOKEN` with the same token
+first.
+
+If you leave the form's placeholder, the Worker ignores it and the first desktop to register
+claims the relay, so paste the URL into the panel right after deploying. Relays deployed with the
+button before relay 1.2.0 let any desktop register; the plugin refuses to use one until it is
+updated.
 
 ### Tunnel on your domain / Quick tunnel
 
@@ -344,6 +349,8 @@ plugin author: the relay runs in your own Cloudflare account.
 - **Plugin storage and settings** hold only non-secret state: the connection type, the Worker
   URL and host id, the tunnel id and hostname, and the names you gave phones. A phone key's
   secret is never stored on the desktop: only the phone keeps it, and the relay keeps its SHA-256.
+- **Owner token:** shown in the panel only when you click **Show owner token** (to paste into
+  Cloudflare's deploy form). It is the same secret this desktop registers with.
 - **Cache folder** (`~/Library/Caches/orca-cloudflare-relay` on macOS,
   `%LOCALAPPDATA%\orca-cloudflare-relay` on Windows, `~/.cache/orca-cloudflare-relay` on Linux)
   holds the downloaded `cloudflared`, an empty config file and a pid file.
@@ -384,9 +391,9 @@ protections.
 | Replaying recorded traffic (legacy E2EE v1 has no per-session desktop nonce) | The bridge refuses any connection whose first frame is not an **E2EE v2** hello. v2 binds fresh nonces from both sides, so recorded sessions cannot be replayed. This is the rule Orca's own relay enforces (`requireV2`). Orca never sees a refused connection. |
 | A leaked or photographed QR code | Codes are **single use**: Orca swaps the code for the phone's own credential at first sign-in. Every **Show** makes a new code and cancels the previous one. A code is **invalidated after 5 minutes**, on **Done, hide code**, or when the relay stops. The pairing link itself never leaves the plugin process; the panel only receives the QR image. |
 | Someone else attaching as your desktop | Each desktop has a 128-bit random host id and a 256-bit secret key. The key is sent only in the `Authorization` header over TLS, never in a URL. The Worker stores only a SHA-256 of it and compares in constant time. Registering a host id needs the admin secret the plugin deploys. |
-| Strangers using your Worker (and its free quota) as their own relay | A plugin-deployed Worker accepts registrations only with its admin secret. A **Deploy-button** Worker has no admin secret, so the first desktop to register **locks it to that desktop's owner token**; anyone else gets "belongs to another Orca desktop". Relays set up before 1.2.0 are locked automatically once the Worker is updated. |
+| Strangers using your Worker (and its free quota) as their own relay | Using the relay needs a registered desktop, and registering needs a secret only your desktop holds. A plugin-deployed Worker gets its admin secret at deploy. A **Deploy-button** Worker gets this desktop's owner token in Cloudflare's deploy form (**Show owner token** in the panel). Without it, the first desktop to register **locks the Worker to its owner token**; anyone else gets "belongs to another Orca desktop". A placeholder or short `RELAY_ADMIN_TOKEN` is ignored, so a known value can't become the key. Deploy-button relays before 1.2.0 accept any desktop, so the plugin keeps the relay off until they are updated. |
 | Flooding your Orca or your free quota | Orca exempts loopback from its per-source limits, so the relay enforces its own: 12 new phone connections per minute per IP, at most 4 concurrent connections per IP and 16 per desktop, and a 10-second first-frame deadline (Orca then gives a connection 10 seconds to authenticate). At most 64 KiB may be buffered before the desktop answers, and 1 MiB while the local connection opens. The bridge opens a local connection to Orca only after a valid v2 hello arrives. |
-| Probing whether you are online | The phone URL answers nothing without a WebSocket upgrade. |
+| Probing whether you are online | The phone URL answers nothing without a WebSocket upgrade. Malformed phone addresses are refused before they reach the Durable Object, so junk traffic uses less of your quota. |
 | A lost phone, or one you no longer trust (Worker relay 1.3.0+) | Each phone pairs on its own key (a 128-bit secret only the phone holds; the Worker stores its SHA-256). **Remove** deletes the key and closes that phone's connection at once, without touching other phones. Only this desktop's key can add, list or remove phone keys. Unscanned codes' keys are deleted. |
 | A stolen Cloudflare API token | The token is needed only to deploy, so it is **deleted after deploy** by default. The setting is "Keep the Cloudflare API token". You can also revoke it in Cloudflare right away. Removing setup without a token still forgets this desktop's relay key. |
 | Secrets on disk | All tokens and keys live in Orca's plugin secret store (OS keychain). None are in settings, logs or process arguments. |

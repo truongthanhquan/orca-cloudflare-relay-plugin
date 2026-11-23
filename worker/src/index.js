@@ -27,7 +27,7 @@
 
 import { DurableObject } from 'cloudflare:workers'
 
-const RELAY_VERSION = '1.3.0'
+const RELAY_VERSION = '1.3.1'
 /** Bumped when the desktop ⇄ relay contract changes; the plugin refuses older relays. */
 const RELAY_PROTOCOL = 3
 const HOST_ID = /^[A-Za-z0-9_-]{16,64}$/
@@ -35,6 +35,7 @@ const CONN_ID = /^[A-Za-z0-9_-]{8,64}$/
 /** A phone's key in its address: `<id>.<secret>` (the id is public to the desktop, the secret is not). */
 const PHONE_ID = /^[A-Za-z0-9_-]{8,32}$/
 const PHONE_SECRET = /^[A-Za-z0-9_-]{22,64}$/
+const PHONE_KEY = /^[A-Za-z0-9_-]{8,32}\.[A-Za-z0-9_-]{22,64}$/
 /** Phone keys one desktop may hold (paired phones plus codes on screen). */
 const MAX_PHONE_KEYS = 64
 /** The bare /v1/c/<hostId> address used by phones paired before per-phone keys. */
@@ -85,6 +86,16 @@ function safeClose(ws, code = 1000, reason = '') {
   }
 }
 
+/**
+ * The admin secret, when one is really set. The Deploy button asks for it with a placeholder
+ * (worker/.dev.vars.example); a placeholder or a short value counts as "not set", so a known
+ * value can never become the key to someone's relay.
+ */
+function adminTokenOf(env) {
+  const token = env.RELAY_ADMIN_TOKEN
+  return typeof token === 'string' && token.length >= 32 && /^[A-Za-z0-9_-]+$/.test(token) && !/^paste-/i.test(token) ? token : null
+}
+
 /** Durable Object name holding the Worker owner (not a valid host id, so never a host). */
 const OWNER_OBJECT = 'worker-owner'
 
@@ -107,8 +118,10 @@ export default {
     }
     if (parts[0] !== 'v1') return json({ error: 'not_found' }, 404)
 
-    // Phone: /v1/c/<hostId>[/...]
+    // Phone: /v1/c/<hostId>[/<id>.<secret>]. Malformed addresses are refused here, before they
+    // wake the Durable Object (and count against the free quota).
     if (parts[1] === 'c' && HOST_ID.test(parts[2] ?? '')) {
+      if (parts.length > 4 || (parts[3] !== undefined && !PHONE_KEY.test(parts[3]))) return json({ error: 'phone_not_allowed' }, 403)
       return env.RELAY.get(env.RELAY.idFromName(parts[2])).fetch(request)
     }
 
@@ -116,7 +129,7 @@ export default {
     if (parts[1] === 'hosts' && HOST_ID.test(parts[2] ?? '')) {
       if (parts[3] === 'register') {
         if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
-        const admin = env.RELAY_ADMIN_TOKEN
+        const admin = adminTokenOf(env)
         if (admin) {
           if (!timingSafeEqual(bearerOf(request), admin)) return json({ error: 'unauthorized' }, 401)
         } else {
@@ -179,7 +192,7 @@ export class RelayHost extends DurableObject {
     if (typeof key !== 'string' || key.length < 32 || key.length > 256) return json({ error: 'invalid_key' }, 400)
     const hash = await sha256(key)
     const stored = await this.ctx.storage.get('keyHash')
-    if (stored && !this.env.RELAY_ADMIN_TOKEN && !timingSafeEqual(stored, hash)) {
+    if (stored && !adminTokenOf(this.env) && !timingSafeEqual(stored, hash)) {
       return json({ error: 'host_id_taken' }, 409)
     }
     await this.ctx.storage.put('keyHash', hash)

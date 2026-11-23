@@ -4,7 +4,7 @@
   "execution": "trusted-worker",
   "id": "cloudflare-relay",
   "name": "Cloudflare Relay",
-  "version": "2.8.0",
+  "version": "2.8.1",
   "description": "Connect Orca Mobile to this desktop from anywhere through your free Cloudflare account. After installing, click \"Set up relay\" (cloud icon) in the status bar (or run \"Set up / open panel\") and follow 3 steps. Phones pair with a normal QR code; no app changes needed. Not affiliated with Cloudflare.",
   "author": {
     "name": "truongthanhquan",

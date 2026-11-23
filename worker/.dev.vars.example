@@ -1,0 +1,5 @@
+# The Deploy to Cloudflare button asks for this secret. Paste the owner token shown in the
+# Cloudflare Relay panel (Setup → Worker relay → Manual): then only your desktop can use this
+# relay, even before you paste its URL into the plugin. Left as is, the first desktop to
+# register claims the relay.
+RELAY_ADMIN_TOKEN=paste-the-owner-token-from-the-Cloudflare-Relay-panel
