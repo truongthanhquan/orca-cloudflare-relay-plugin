@@ -32,6 +32,18 @@ import {
   updateManifestUrl
 } from './updates.mjs'
 import { pluginCacheDir } from './paths.mjs'
+import {
+  addPhoneKey,
+  cleanPhoneName,
+  listPhoneKeys,
+  newPhoneKey,
+  phoneKeyEndpoint,
+  phoneListView,
+  removePhoneKey,
+  setLegacyAccess,
+  supportsPhoneKeys,
+  unusedKeys
+} from './phone-access.mjs'
 import { rememberHostId, rememberedHostId } from './relay-identity.mjs'
 import { qrSvg } from './qr.mjs'
 import { TunnelProcess } from './tunnel-process.mjs'
@@ -83,7 +95,9 @@ const KEYS = {
   hostKey: 'relayHostKey',
   adminToken: 'relayAdminToken',
   /** Highest published minimums seen: { plugin, relay }. Kept so going offline can't skip one. */
-  required: 'required-versions'
+  required: 'required-versions',
+  /** Names the person gave phones paired through per-phone keys: { [keyId]: { name } }. */
+  phoneNames: 'phone-names'
 }
 
 /** An error the user fixes in the panel's setup section (the panel opens it for them). */
@@ -96,6 +110,7 @@ let tunnel = null
 let bridge = null
 let custom = null
 let updateTimers = []
+let phonesTimer = null
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error)
@@ -229,6 +244,20 @@ export default function activate(orca) {
     })
   }
   renderStatusBar(currentStatus())
+
+  // A phone connected on the key of the code on screen: it is pairing, so the panel can hide the
+  // code (it stays valid until it expires, so a pairing in progress is never cut off).
+  bridge.on('phone-open', (phoneId) => {
+    if (phoneId && shownCode?.phoneId === phoneId) orca.panels.post('pairing-connected', {})
+    refreshPhonesSoon()
+  })
+  let lastPhoneCount = 0
+  bridge.on('status', (status) => {
+    if (status.phones !== lastPhoneCount) {
+      lastPhoneCount = status.phones
+      refreshPhonesSoon()
+    }
+  })
 
   function use(transport) {
     if (active !== transport) active.stop({ silent: true })
@@ -426,9 +455,12 @@ export default function activate(orca) {
     const health = await waitForRelay(relay.workerUrl)
     // Paired phones dial <worker>/v1/c/<hostId>: reuse the id this machine already registered on
     // this Worker (by any copy of the plugin), then this copy's own, so no phone has to pair again.
-    const hostId = (await rememberedHostId(relay.workerUrl)) ?? previous?.hostId ?? randomSecret(16)
+    const knownHostId = (await rememberedHostId(relay.workerUrl)) ?? previous?.hostId ?? null
+    const hostId = knownHostId ?? randomSecret(16)
     bridge.setStatus({ state: 'starting', message: 'Registering this desktop with the relay…' })
     await registerRelayHost({ workerUrl: relay.workerUrl, hostId, hostKey, adminToken })
+    // A brand-new address has no phones from before per-phone keys: keep its shared address shut.
+    if (!knownHostId && supportsPhoneKeys(health)) await blockSharedAddress({ workerUrl: relay.workerUrl, hostId, hostKey })
     await rememberHostId(relay.workerUrl, hostId).catch((error) => log(`Could not record the relay identity: ${errorMessage(error)}`))
     await orca.secrets.set(KEYS.hostKey, hostKey)
     if (usingWorkerUrl) await orca.secrets.set(KEYS.adminToken, adminToken)
@@ -492,15 +524,23 @@ export default function activate(orca) {
       await registerRelayHost({ workerUrl: relay.workerUrl, hostId: relay.hostId, hostKey: randomSecret(32), adminToken, timeoutMs: 20_000 })
         .catch((error) => log(`The old relay address stays registered but unused: ${errorMessage(error)}`))
     }
+    if (supportsPhoneKeys(relayState)) await blockSharedAddress({ workerUrl: relay.workerUrl, hostId, hostKey })
     await orca.secrets.set(KEYS.hostKey, hostKey)
     await saveState(KEYS.worker, { ...relay, hostId })
     await rememberHostId(relay.workerUrl, hostId)
+    // Every phone key lived on the old address, so the names go with it.
+    await orca.storage.delete(KEYS.phoneNames)
     await invalidatePairingCode('all phones were disconnected from the relay')
     log('Disconnected every phone from the relay: it now has a new address. Pair the phones you keep again.')
     if ((await orca.storage.get(KEYS.enabled)) === true) {
       bridge.stop({ silent: true })
       await startTunnel()
     }
+  }
+
+  /** New relay addresses: every phone pairs with its own key, so the shared address stays shut. */
+  async function blockSharedAddress(relay) {
+    await setLegacyAccess(relay, false).catch((error) => log(`Could not close the shared relay address: ${errorMessage(error)}`))
   }
 
   /** Relay 1.2.0+ locks a Deploy-button Worker to the first owner token it sees. */
@@ -608,6 +648,7 @@ export default function activate(orca) {
         }
       }
       await orca.storage.delete(KEYS.worker)
+      await orca.storage.delete(KEYS.phoneNames)
       await orca.secrets.delete(KEYS.hostKey)
       await orca.secrets.delete(KEYS.adminToken)
     }
@@ -621,29 +662,135 @@ export default function activate(orca) {
    * exists, and it is invalidated after PAIRING_CODE_TTL_MS. Phones that already paired keep
    * their own long-term credentials.
    */
-  async function pairingOffer() {
+  async function pairingOffer(input) {
     const status = currentStatus()
     if (status.state !== 'connected' || !status.endpoint) {
       throw new Error('Start Cloudflare Relay and wait until it is connected.')
     }
     const config = await settings()
-    const offer = await createMobilePairingOffer({
-      cli: findOrcaCli({ override: config.orcaCliPath || undefined }),
-      endpoint: status.endpoint,
-      relayFallback: config.relayFallback,
-      rotate: true
-    })
+    // Worker relay 1.3.0+: this code gets its own phone key, so the phone can be removed alone.
+    const relay = await phoneKeyRelay()
+    let endpoint = status.endpoint
+    let phoneId = null
+    if (relay) {
+      const key = newPhoneKey()
+      await addPhoneKey(relay, key)
+      phoneId = key.id
+      endpoint = phoneKeyEndpoint(relay.workerUrl, relay.hostId, key)
+      const name = cleanPhoneName(input?.name)
+      if (name) await saveState(KEYS.phoneNames, { ...((await orca.storage.get(KEYS.phoneNames)) ?? {}), [phoneId]: { name } })
+    }
+    let offer
+    try {
+      offer = await createMobilePairingOffer({
+        cli: findOrcaCli({ override: config.orcaCliPath || undefined }),
+        endpoint,
+        relayFallback: config.relayFallback,
+        rotate: true
+      })
+    } catch (error) {
+      if (phoneId) dropUnusedKey(phoneId)
+      throw error
+    }
     clearCodeTimer()
+    // The code it replaces can't be scanned any more: forget its key if no phone used it.
+    if (shownCode?.phoneId) dropUnusedKey(shownCode.phoneId)
     const expiresAt = Date.now() + PAIRING_CODE_TTL_MS
     shownCode = {
-      endpoint: status.endpoint,
+      endpoint,
+      phoneId,
       timer: setTimeout(() => {
         invalidatePairingCode('the pairing code expired').catch((error) => log(`Could not invalidate the pairing code: ${errorMessage(error)}`))
       }, PAIRING_CODE_TTL_MS)
     }
     shownCode.timer.unref?.()
-    // The panel gets the QR image only; the link itself never leaves this process.
-    return { endpoint: offer.endpoint, connectionMode: offer.connectionMode, expiresAt, svg: qrSvg(offer.pairingUrl) }
+    // The panel gets the QR image only; the link and the phone's key never leave this process.
+    return { endpoint: status.endpoint, connectionMode: offer.connectionMode, expiresAt, phoneKeys: Boolean(phoneId), svg: qrSvg(offer.pairingUrl) }
+  }
+
+  /** The relay's address and this desktop's key, when the deployed relay has per-phone keys. */
+  async function phoneKeyRelay() {
+    if (currentMode !== 'worker' || !supportsPhoneKeys(relayState)) return null
+    const relay = await orca.storage.get(KEYS.worker)
+    const hostKey = await orca.secrets.get(KEYS.hostKey)
+    return relay?.workerUrl && relay?.hostId && hostKey ? { workerUrl: relay.workerUrl, hostId: relay.hostId, hostKey } : null
+  }
+
+  /** Removes a phone key whose code was never used (a used one belongs to a paired phone). */
+  function dropUnusedKey(id) {
+    ;(async () => {
+      const relay = await phoneKeyRelay()
+      if (!relay) return
+      const remote = await listPhoneKeys(relay)
+      const phone = remote.phones.find((entry) => entry.id === id)
+      if (phone && !phone.firstSeen) await removePhoneKey(relay, id)
+      if (!phone || !phone.firstSeen) await forgetPhoneName(id)
+    })().catch((error) => log(`Could not clean up an unused pairing key: ${errorMessage(error)}`))
+  }
+
+  async function forgetPhoneName(id) {
+    const names = (await orca.storage.get(KEYS.phoneNames)) ?? {}
+    if (!(id in names)) return
+    delete names[id]
+    await saveState(KEYS.phoneNames, names)
+  }
+
+  /**
+   * The phones on this relay for the panel: each one paired through its own key, plus the shared
+   * address older phones use. Also removes keys of codes nobody used.
+   */
+  async function phonesView() {
+    await settings()
+    if (currentMode !== 'worker') return { phones: { supported: false, reason: 'mode' } }
+    if (!(await orca.storage.get(KEYS.worker))?.workerUrl) return { phones: { supported: false, reason: 'setup' } }
+    const relay = await phoneKeyRelay()
+    if (!relay) return { phones: { supported: false, reason: 'relay-update' } }
+    const remote = await listPhoneKeys(relay)
+    const stale = unusedKeys(remote, { olderThanMs: PAIRING_CODE_TTL_MS + 60_000, keep: shownCode?.phoneId ?? null })
+    for (const id of stale) await removePhoneKey(relay, id).catch(() => {})
+    const names = (await orca.storage.get(KEYS.phoneNames)) ?? {}
+    const known = new Set(remote.phones.map((phone) => phone.id))
+    const kept = Object.fromEntries(Object.entries(names).filter(([id]) => known.has(id) && !stale.includes(id)))
+    if (Object.keys(kept).length !== Object.keys(names).length) await saveState(KEYS.phoneNames, kept)
+    return { phones: { supported: true, list: phoneListView(remote, kept), legacy: remote.legacy } }
+  }
+
+  /** Cuts one phone off the relay: its key is deleted and its connection closed. */
+  async function removePhone(input) {
+    const id = typeof input?.id === 'string' ? input.id : ''
+    const relay = await phoneKeyRelay()
+    if (!relay) throw new Error('Removing one phone needs the Worker relay 1.3.0 or newer. Click Update relay first.')
+    await removePhoneKey(relay, id)
+    await forgetPhoneName(id)
+    log('Removed a phone from the relay.')
+    return phonesView()
+  }
+
+  async function renamePhone(input) {
+    const id = typeof input?.id === 'string' ? input.id : ''
+    const name = cleanPhoneName(input?.name)
+    const names = (await orca.storage.get(KEYS.phoneNames)) ?? {}
+    if (name) names[id] = { name }
+    else delete names[id]
+    await saveState(KEYS.phoneNames, names)
+    return phonesView()
+  }
+
+  async function setLegacy(input) {
+    const relay = await phoneKeyRelay()
+    if (!relay) throw new Error('This needs the Worker relay 1.3.0 or newer. Click Update relay first.')
+    await setLegacyAccess(relay, input?.allowed === true)
+    log(input?.allowed === true ? 'Phones paired before per-phone access can use the relay again.' : 'Blocked phones paired before per-phone access from the relay.')
+    return phonesView()
+  }
+
+  /** Pushes a fresh phone list to the panel shortly after phones connect or disconnect. */
+  function refreshPhonesSoon() {
+    clearTimeout(phonesTimer)
+    phonesTimer = setTimeout(() => {
+      phonesView().then((view) => orca.panels.post('phones', view.phones)).catch(() => {})
+    }, 1500)
+    phonesTimer.unref?.()
   }
 
   function clearCodeTimer() {
@@ -653,9 +800,10 @@ export default function activate(orca) {
   /** Replaces the unused code on screen with one nobody has seen, so a photo of it is useless. */
   async function invalidatePairingCode(reason) {
     if (!shownCode) return
-    const { endpoint } = shownCode
+    const { endpoint, phoneId } = shownCode
     clearCodeTimer()
     shownCode = null
+    if (phoneId) dropUnusedKey(phoneId)
     orca.panels.post('pairing-invalidated', { reason })
     const config = await settings()
     const cli = findOrcaCli({ override: config.orcaCliPath || undefined })
@@ -898,6 +1046,10 @@ export default function activate(orca) {
     return snapshot()
   })
   handle('pair', pairingOffer)
+  handle('phones', phonesView)
+  handle('remove-phone', removePhone)
+  handle('rename-phone', renamePhone)
+  handle('set-legacy-access', setLegacy)
   handle('check-updates', () => checkForUpdates())
   handle('update-plugin', async () => ({ updates: await updatePluginNow() }))
   handle('update-relay', async (input) => ({ updates: await updateRelay(input) }))
@@ -1006,6 +1158,7 @@ export default function activate(orca) {
 export function deactivate() {
   for (const timer of updateTimers) clearTimeout(timer)
   updateTimers = []
+  clearTimeout(phonesTimer)
   // The unused code dies with the desktop process anyway; nothing to rotate here.
   tunnel?.stop({ silent: true })
   bridge?.stop({ silent: true })

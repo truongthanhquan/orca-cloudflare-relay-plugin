@@ -223,7 +223,11 @@ export class WorkerRelayBridge extends EventEmitter {
         return
       }
       lastPong = Date.now()
-      if (message?.t === 'open' && typeof message.id === 'string') this.openPhone(message.id)
+      if (message?.t === 'open' && typeof message.id === 'string') {
+        // Relay 1.3.0+ says which phone key the connection used (null: the shared address).
+        this.emit('phone-open', typeof message.phone === 'string' ? message.phone : null)
+        this.openPhone(message.id)
+      }
     })
     ws.addEventListener('error', () => {})
     ws.addEventListener('close', (event) => {

@@ -58,6 +58,17 @@
       .hidden { display: none !important; }
       .qr { width: min(240px, 100%); margin: 8px 0; }
       .qr svg { width: 100%; height: auto; display: block; border-radius: 6px; }
+      .pair-name { margin-bottom: 8px; }
+
+      /* Phones on this relay */
+      .phone-list { list-style: none; margin: 0; padding: 0; }
+      .phone-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 7px 0; border-top: 1px solid var(--orca-border, #444); }
+      .phone-row:first-child { border-top: none; }
+      #phone-list:not(:empty) + .phone-list #legacy-row { border-top: 1px solid var(--orca-border, #444); }
+      .phone-main { display: flex; flex-direction: column; min-width: 0; flex: 1 1 140px; }
+      .phone-main b { overflow-wrap: anywhere; }
+      .phone-main input { margin-top: 2px; }
+      .phone-live { color: #2fb36d; }
 
       /* Setup steps: all visible, the current one highlighted */
       .num {
@@ -320,8 +331,21 @@
 
     <div class="card hidden" id="pair-card">
       <h2 id="pair-title">Pair Orca Mobile</h2>
-      <p class="muted" id="pair-intro">Scan the code in Orca Mobile (<b>Pair</b>). Pair as many phones as you like; to see them, open <b>Paired devices</b> on Orca's <b>Mobile</b> page.</p>
+      <p class="muted" id="pair-intro">Scan the code in Orca Mobile (<b>Pair</b>). Pair as many phones as you like; <span id="pair-intro-orca">to see them, open <b>Paired devices</b> on Orca's <b>Mobile</b> page.</span><span id="pair-intro-list" class="hidden">each one gets its own key and shows up below, where you can remove it on its own.</span></p>
       <div class="pair-ui" id="main-pair"></div>
+      <div id="phones" class="hidden" style="margin-top:12px">
+        <h2 style="margin-bottom:2px">Phones on this relay</h2>
+        <ul id="phone-list" class="phone-list"></ul>
+        <ul class="phone-list">
+          <li id="legacy-row" class="phone-row hidden">
+            <div class="phone-main"><b>Phones paired before version 2.8</b><span class="muted hint" id="legacy-meta"></span></div>
+            <div class="row"><button id="legacy-toggle" class="danger">Block</button></div>
+          </li>
+        </ul>
+        <p id="phones-empty" class="muted hint hidden">No phones yet. Each phone you pair from now on shows up here, and you can remove it on its own.</p>
+        <p id="phones-result" class="muted hint" style="margin-top:4px"></p>
+      </div>
+      <p id="phones-update" class="muted hint hidden" style="margin-top:10px">To see the phones on this relay and remove them one at a time, click <b>Update relay</b> above (your phones stay paired).</p>
       <details id="pair-remove" style="margin-top:10px">
         <summary class="muted">Remove a phone, or lost one?</summary>
         <ol class="guide" style="margin-top:6px">
@@ -329,7 +353,7 @@
           <li>Under <b>Paired devices</b>, find the phone. Phones are named "Mobile" plus the date they paired.</li>
           <li>Remove it. Orca ends its access and closes its connections, including through this relay.</li>
         </ol>
-        <p class="muted">The plugin can't remove a phone itself: Orca doesn't offer plugins a way to do that yet.</p>
+        <p class="muted">With the Worker relay, <b>Remove</b> in the list above cuts one phone off this relay at once. Orca still has it paired (it can connect on your local network) until you remove it there too: the plugin can't do that part, because Orca doesn't offer plugins a way yet.</p>
         <div id="disconnect-all-wrap" class="hidden" style="margin-top:8px">
           <p><b>Can't tell which one is the lost phone?</b> <span class="muted">Cut every phone off the Cloudflare relay at once. They stay paired in Orca (for your local network) until you remove them there; the phones you keep pair again here.</span></p>
           <div class="row" id="disconnect-ask"><button id="disconnect-all" class="danger">Disconnect all phones from the relay</button></div>
@@ -359,12 +383,14 @@
     </footer>
 
     <template id="pair-template">
+      <input type="text" class="pair-name hidden" maxlength="40" placeholder="Name this phone (optional), e.g. Work iPhone" aria-label="Phone name (optional)" />
       <div class="row">
         <button class="primary pair-show">Show pairing QR code</button>
         <button class="pair-hide hidden">Done, hide code</button>
       </div>
       <div class="qr"></div>
       <p class="pair-security muted hidden">🔒 Works once and expires in <span class="pair-expiry"></span>. Treat it like a password. When your phone shows it is paired, click <b>Done, hide code</b>.</p>
+      <p class="pair-done ok hidden">✓ A phone connected with this code. Finish pairing on the phone; it then shows in the list.</p>
       <p class="pair-hint muted hidden"></p>
       <p class="pair-error error-text"></p>
     </template>
@@ -404,6 +430,9 @@
         const ui = {
           clear(reason) {
             clearInterval(timer)
+            // After a phone connected, the code expiring later is expected: keep the success note.
+            if (reason && !ui.showing() && !q('.pair-done').classList.contains('hidden')) return
+            show(q('.pair-done'), false)
             q('.qr').innerHTML = ''
             show(q('.pair-security'), false)
             show(q('.pair-hide'), false)
@@ -411,6 +440,17 @@
             q('.pair-error').textContent = reason ? `Code invalidated: ${reason}.` : ''
           },
           showing: () => q('.qr').innerHTML !== '',
+          /** A phone connected with the code on screen: hide it (it stays valid until it expires). */
+          connected() {
+            if (!ui.showing()) return
+            clearInterval(timer)
+            q('.qr').innerHTML = ''
+            show(q('.pair-security'), false)
+            show(q('.pair-hide'), false)
+            show(q('.pair-done'), true)
+            q('.pair-show').textContent = 'Pair another phone'
+          },
+          setNaming(on) { show(q('.pair-name'), on) },
           /** Disabled with a reason, so a greyed-out button never leaves the person guessing. */
           setEnabled(enabled, why = '') {
             q('.pair-show').disabled = !enabled
@@ -420,9 +460,13 @@
         }
         q('.pair-show').addEventListener('click', () => withButton(q('.pair-show'), async () => {
           q('.pair-error').textContent = ''
-          const result = await request('pair')
+          const naming = !q('.pair-name').classList.contains('hidden')
+          const result = await request('pair', naming ? { name: q('.pair-name').value } : undefined)
           if (!result.ok) { q('.pair-error').textContent = result.error; return }
           for (const other of pairUis) if (other !== ui) other.clear()
+          q('.pair-name').value = ''
+          show(q('.pair-done'), false)
+          // Our own QR SVG, generated in the plugin from the pairing link (no outside text in it).
           q('.qr').innerHTML = result.svg
           show(q('.pair-security'), true)
           show(q('.pair-hide'), true)
@@ -446,6 +490,125 @@
       makePairUi($('w3-pair'))
       makePairUi($('main-pair'))
       orca.plugin.on('pairing-invalidated', (payload) => pairUis.forEach((ui) => ui.clear(payload && payload.reason)))
+      orca.plugin.on('pairing-connected', () => { pairUis.forEach((ui) => ui.connected()); loadPhonesSoon() })
+
+      /* ================= Phones on this relay (Worker relay 1.3.0+) ================= */
+      let phones = null
+      let phonesTimer = null
+      /** A row being renamed or confirmed: re-renders leave the list alone until it is done. */
+      let editing = false
+      const stopEditing = () => { editing = false; renderPhones() }
+      function loadPhonesSoon(delay = 300) {
+        clearTimeout(phonesTimer)
+        phonesTimer = setTimeout(async () => {
+          const result = await request('phones', undefined, 30000)
+          if (result.ok) { phones = result.phones; renderPhones() }
+        }, delay)
+      }
+      orca.plugin.on('phones', (next) => { phones = next; renderPhones() })
+
+      function ago(at) {
+        const s = Math.max(0, Math.round((Date.now() - at) / 1000))
+        if (s < 60) return 'just now'
+        if (s < 3600) return `${Math.round(s / 60)} min ago`
+        if (s < 86400) return `${Math.round(s / 3600)} h ago`
+        return `${Math.round(s / 86400)} days ago`
+      }
+      const day = (at) => new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+      function el(tag, className, text) {
+        const node = document.createElement(tag)
+        if (className) node.className = className
+        if (text !== undefined) node.textContent = text
+        return node
+      }
+      function phonesResult(ok, text) {
+        $('phones-result').className = ok ? 'muted hint' : 'error-text'
+        $('phones-result').textContent = text || ''
+      }
+
+      function phoneRow(phone) {
+        const row = el('li', 'phone-row')
+        const main = el('div', 'phone-main')
+        const name = el('b', '', phone.name || `Phone paired ${day(phone.pairedAt)}`)
+        const meta = el('span', 'muted hint')
+        if (phone.connected) meta.appendChild(el('span', 'phone-live', '● connected now'))
+        else meta.appendChild(document.createTextNode(`last seen ${ago(phone.lastSeen)}`))
+        meta.appendChild(document.createTextNode(` · paired ${day(phone.pairedAt)}`))
+        main.append(name, meta)
+        const actions = el('div', 'row')
+        const rename = el('button', 'link', 'Rename')
+        const remove = el('button', 'danger', 'Remove')
+        actions.append(rename, remove)
+        row.append(main, actions)
+
+        rename.addEventListener('click', () => {
+          editing = true
+          const input = el('input')
+          input.type = 'text'
+          input.maxLength = 40
+          input.value = phone.name || ''
+          input.placeholder = 'Phone name'
+          const save = el('button', 'primary', 'Save')
+          const cancel = el('button', '', 'Cancel')
+          name.replaceWith(input)
+          actions.replaceChildren(save, cancel)
+          input.focus()
+          cancel.addEventListener('click', stopEditing)
+          const commit = () => withButton(save, async () => {
+            const result = await request('rename-phone', { id: phone.id, name: input.value })
+            editing = false
+            if (result.ok) { phones = result.phones; phonesResult(true, '') } else phonesResult(false, result.error)
+          })
+          save.addEventListener('click', commit)
+          input.addEventListener('keydown', (event) => { if (event.key === 'Enter') commit() })
+        })
+        remove.addEventListener('click', () => {
+          editing = true
+          const yes = el('button', 'danger', 'Yes, remove')
+          const cancel = el('button', '', 'Cancel')
+          actions.replaceChildren(el('span', 'error-text', 'Cut it off the relay now?'), yes, cancel)
+          cancel.addEventListener('click', stopEditing)
+          yes.addEventListener('click', () => withButton(yes, async () => {
+            const result = await request('remove-phone', { id: phone.id }, 30000)
+            editing = false
+            if (result.ok) {
+              phones = result.phones
+              phonesResult(true, '✅ Removed: that phone can no longer use this relay. To unpair it completely, also remove it under Paired devices on Orca\'s Mobile page.')
+            } else phonesResult(false, result.error)
+          }))
+        })
+        return row
+      }
+
+      function renderPhones() {
+        const worker = (snap.settings || {}).mode === 'worker' && Boolean(snap.worker)
+        const p = worker ? phones : null
+        const supported = Boolean(p && p.supported)
+        show($('phones'), supported)
+        show($('phones-update'), Boolean(p && !p.supported && p.reason === 'relay-update'))
+        pairUis.forEach((ui) => ui.setNaming(supported))
+        show($('pair-intro-orca'), !supported)
+        show($('pair-intro-list'), supported)
+        if (!supported) return
+        if (!editing) $('phone-list').replaceChildren(...p.list.map(phoneRow))
+        const legacy = p.legacy || { allowed: true }
+        const legacyUsed = Boolean(legacy.lastSeen || legacy.connected)
+        show($('legacy-row'), !legacy.allowed || legacyUsed)
+        $('legacy-meta').textContent = !legacy.allowed
+          ? 'Blocked: phones paired with older versions can no longer use this relay.'
+          : `${legacy.connected ? 'Connected now' : `Last used ${ago(legacy.lastSeen)}`}. They share one address. Pair them again here, then block it.`
+        $('legacy-toggle').textContent = legacy.allowed ? 'Block' : 'Allow again'
+        $('legacy-toggle').className = legacy.allowed ? 'danger' : ''
+        show($('phones-empty'), p.list.length === 0 && !(legacy.allowed && legacyUsed))
+      }
+      $('legacy-toggle').addEventListener('click', () => withButton($('legacy-toggle'), async () => {
+        const allowed = !(phones && phones.legacy && phones.legacy.allowed)
+        const result = await request('set-legacy-access', { allowed }, 30000)
+        if (result.ok) {
+          phones = result.phones
+          phonesResult(true, allowed ? 'Phones paired with older versions can use the relay again.' : '✅ Blocked: phones paired with older versions can no longer use this relay.')
+        } else phonesResult(false, result.error)
+      }))
 
       /* ================= Rendering ================= */
       function render() {
@@ -460,6 +623,7 @@
         renderWizard()
         renderStatus()
         renderSummary()
+        renderPhones()
       }
 
       function renderWizard() {
@@ -587,6 +751,7 @@
         if (next.updates) renderUpdates(next.updates)
         renderAbout(snap.about)
         render()
+        loadPhonesSoon()
       }
 
       async function checkSavedToken() {
@@ -783,7 +948,7 @@
         if (result.updates) renderUpdates(result.updates)
         if (!result.ok) $('relay-update-message').textContent = result.error
       }))
-      orca.plugin.on('updates', renderUpdates)
+      orca.plugin.on('updates', (next) => { renderUpdates(next); loadPhonesSoon(1000) })
 
       /* ================= About & links ================= */
       function renderAbout(about) {
@@ -808,7 +973,13 @@
       $('open-tokens').addEventListener('click', () => external(links.createTunnelToken || 'https://dash.cloudflare.com/profile/api-tokens'))
       $('open-tunnels').addEventListener('click', () => external('https://one.dash.cloudflare.com/'))
 
-      orca.plugin.on('status', (status) => { current = status; snap.status = status; render() })
+      orca.plugin.on('status', (status) => {
+        const wasConnected = current && current.state === 'connected'
+        current = status
+        snap.status = status
+        render()
+        if (status.state === 'connected' && !wasConnected) loadPhonesSoon()
+      })
       request('status').then((result) => { applySnapshot(result); checkSavedToken() })
     </script>
   </body>

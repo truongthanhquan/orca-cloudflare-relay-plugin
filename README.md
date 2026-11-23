@@ -24,7 +24,7 @@ Cloudflare instead of a LAN IP.
 ### Worker relay (Worker + Durable Object, Free plan)
 
 ```
-Orca Mobile ──wss /v1/c/<hostId>──▶ Cloudflare Worker ─▶ RelayHost Durable Object
+Orca Mobile ──wss /v1/c/<hostId>/<phone key>──▶ Cloudflare Worker ─▶ RelayHost Durable Object
                                                               ▲   (splices sockets)
 Orca desktop ── plugin bridge ──wss control + data sockets────┘
       └─▶ ws://127.0.0.1:6768 (Orca's own mobile server, same as LAN)
@@ -38,8 +38,11 @@ Orca desktop ── plugin bridge ──wss control + data sockets────�
   LAN client.
 - The relay is a blind pipe. Orca's end-to-end encryption (keys pinned from the QR code) runs
   inside the phone's socket, so Cloudflare and the Worker only ever see ciphertext.
-- The phone's address is `wss://orca-relay.<you>.workers.dev/v1/c/<hostId>`. It never changes, so
-  phones stay paired across Orca restarts and redeploys.
+- Each phone gets its own address, `wss://orca-relay.<you>.workers.dev/v1/c/<hostId>/<id>.<secret>`
+  (relay 1.3.0 and later). It is created for the pairing code you show and never changes, so phones
+  stay paired across Orca restarts and redeploys. The Worker stores only a SHA-256 of the secret,
+  and removing a phone's key cuts that one phone off. Phones paired with older versions share
+  `…/v1/c/<hostId>` until you block it.
 - Each desktop registers its host id with a secret key, and only that desktop can attach to it.
 
 **Free plan budget:** Durable Objects get 100,000 requests/day, and incoming WebSocket messages
@@ -152,9 +155,26 @@ plugin API for it), so the panel points you to **Paired devices** on Orca's **Mo
 pairing card shows a new code whenever you want one; when the relay isn't connected, it says why
 the button is waiting.
 
-**Removing a phone** happens in Orca, because Orca offers plugins no supported way to revoke one
-(no host API method and no CLI command). The card's **Remove a phone, or lost one?** section
-walks you through it:
+**Phones on this relay** (Worker relay 1.3.0 and later). Every pairing code the panel shows gets
+its own phone key, and the pairing card lists the phones that paired with one:
+- **What each row shows:** the name you typed when you showed the code (optional; **Rename**
+  changes it), when it paired, and whether it is **connected now** or when it was last seen. This
+  comes from the relay Worker and this plugin's own storage, not from Orca's device list.
+- **Remove** deletes that phone's key on the relay and closes its connection. Your other phones
+  keep working. The phone stays paired in Orca (it can still connect on your local network) until
+  you also remove it under **Paired devices** (below).
+- **Codes nobody scanned** don't show up: their keys are deleted when the code is hidden, replaced
+  or expires.
+- **The code hides itself** once a phone connects with it. It stays valid until it expires, so a
+  pairing in progress is never cut off.
+- **Phones paired with version 2.7 or older** share one address. Once one of them connects, the
+  list shows a **Phones paired before version 2.8** row: pair those phones again, then **Block** it.
+  New relay addresses (a fresh setup, or after **Disconnect all phones**) start with it blocked.
+- **Older relay Workers:** the list appears after **Update relay**, which keeps your phones paired.
+
+**Removing a phone from Orca** happens in Orca, because Orca offers plugins no supported way to
+revoke one (no host API method and no CLI command). The card's **Remove a phone, or lost one?**
+section walks you through it:
 1. Open Orca's **Mobile** page (Orca's help calls it **Settings → Mobile**).
 2. Under **Paired devices**, find the phone ("Mobile" plus the date it paired).
 3. Remove it. Orca ends its access and closes its connections, including through this relay.
@@ -304,7 +324,7 @@ Besides the `orca` CLI calls above, the Worker relay mode starts no processes. I
 | Host | When | What is sent |
 | --- | --- | --- |
 | `api.cloudflare.com` | Only during setup, update or removal, with the token you pasted | Deploys or deletes the relay Worker, or creates or deletes the tunnel and its DNS record, in **your** account |
-| Your relay Worker (`<name>.<you>.workers.dev` or the URL you entered) | While the relay is on, plus a GET of its public `/health` every 6 hours to compare versions | This desktop's relay key (in a header), and the phone traffic, which is end-to-end encrypted |
+| Your relay Worker (`<name>.<you>.workers.dev` or the URL you entered) | While the relay is on, plus a GET of its public `/health` every 6 hours to compare versions | This desktop's relay key (in a header), the phone traffic (end-to-end encrypted), and, with relay 1.3.0, the phone-key calls: add a key when you show a code, list keys when the panel shows phones, remove one when you click **Remove** or a code goes unused |
 | `github.com/cloudflare/cloudflared/releases` | Tunnel modes, the first time only | Downloads `cloudflared` version 2026.11.1. Its SHA-256 is checked against values pinned in [`src/cloudflared-binary.mjs`](src/cloudflared-binary.mjs) before it is used. Skipped if you set **cloudflared path** |
 | `raw.githubusercontent.com` (this repository's `update-manifest.json`) | 15 seconds after start, then every 6 hours | A plain GET with no identifiers, to show "Update available" and to turn the relay off when this version is below a published security minimum. Nothing about you or your setup is sent, and nothing is installed |
 | Your own address (custom mode) | Every 60 seconds while on | A plain HTTPS GET of `/web-index.html`, to show whether it reaches your Orca |
@@ -322,7 +342,8 @@ plugin author: the relay runs in your own Cloudflare account.
   so rather than store them some other way. The API token is deleted right after setup unless you turn on
   **Keep the Cloudflare API token**.
 - **Plugin storage and settings** hold only non-secret state: the connection type, the Worker
-  URL and host id, the tunnel id and hostname.
+  URL and host id, the tunnel id and hostname, and the names you gave phones. A phone key's
+  secret is never stored on the desktop: only the phone keeps it, and the relay keeps its SHA-256.
 - **Cache folder** (`~/Library/Caches/orca-cloudflare-relay` on macOS,
   `%LOCALAPPDATA%\orca-cloudflare-relay` on Windows, `~/.cache/orca-cloudflare-relay` on Linux)
   holds the downloaded `cloudflared`, an empty config file and a pid file.
@@ -366,6 +387,7 @@ protections.
 | Strangers using your Worker (and its free quota) as their own relay | A plugin-deployed Worker accepts registrations only with its admin secret. A **Deploy-button** Worker has no admin secret, so the first desktop to register **locks it to that desktop's owner token**; anyone else gets "belongs to another Orca desktop". Relays set up before 1.2.0 are locked automatically once the Worker is updated. |
 | Flooding your Orca or your free quota | Orca exempts loopback from its per-source limits, so the relay enforces its own: 12 new phone connections per minute per IP, at most 4 concurrent connections per IP and 16 per desktop, and a 10-second first-frame deadline (Orca then gives a connection 10 seconds to authenticate). At most 64 KiB may be buffered before the desktop answers, and 1 MiB while the local connection opens. The bridge opens a local connection to Orca only after a valid v2 hello arrives. |
 | Probing whether you are online | The phone URL answers nothing without a WebSocket upgrade. |
+| A lost phone, or one you no longer trust (Worker relay 1.3.0+) | Each phone pairs on its own key (a 128-bit secret only the phone holds; the Worker stores its SHA-256). **Remove** deletes the key and closes that phone's connection at once, without touching other phones. Only this desktop's key can add, list or remove phone keys. Unscanned codes' keys are deleted. |
 | A stolen Cloudflare API token | The token is needed only to deploy, so it is **deleted after deploy** by default. The setting is "Keep the Cloudflare API token". You can also revoke it in Cloudflare right away. Removing setup without a token still forgets this desktop's relay key. |
 | Secrets on disk | All tokens and keys live in Orca's plugin secret store (OS keychain). None are in settings, logs or process arguments. |
 
@@ -380,8 +402,9 @@ protections.
   they hold every slot, they cannot get in: every connection must still pass Orca's E2EE and
   token checks. If it happens, rotate the address by removing and redoing setup. Your phones
   will need to pair again.
-- **Revoke a lost phone in Orca:** use **Paired devices** on Orca's Mobile page. A paired phone holds its
-  own long-term credential, and removing the device there cuts it off immediately, relay or not.
+- **Revoke a lost phone in Orca too:** **Remove** in the panel cuts a phone off the relay only. Use
+  **Paired devices** on Orca's Mobile page as well: the phone holds its own long-term credential,
+  and removing the device there cuts it off everywhere, relay or not.
 - **Pairing widens Orca's listener:** like Orca's own network pairing, creating an offer makes
   Orca's mobile server listen on all interfaces (LAN), not only loopback.
 

@@ -1,7 +1,7 @@
 // Orca Cloudflare Relay — a Worker + SQLite Durable Object that relays Orca Mobile to an
 // Orca desktop. Runs on the Workers Free plan. No dependencies, no build step.
 //
-//   phone   ──wss /v1/c/<hostId>──────────────▶ ┐
+//   phone   ──wss /v1/c/<hostId>/<phone>──────▶ ┐
 //                                               │  RelayHost DO (one per desktop)
 //   desktop ──wss /v1/hosts/<hostId>/control──▶ │  · tells the desktop "phone <id> arrived"
 //   desktop ──wss /v1/hosts/<hostId>/data/<id>▶ ┘  · splices phone <id> ⇄ data <id>
@@ -19,14 +19,26 @@
 // · Phone connections are rate limited per IP, capped per IP and per host, because to Orca every
 //   relayed phone arrives from loopback and Orca's own per-source limits do not apply.
 // · The desktop bridge additionally refuses anything but an E2EE v2 handshake.
+// · Per-phone access (protocol 3): each pairing code points its phone at its own address,
+//   /v1/c/<hostId>/<id>.<secret>. The desktop adds and removes those keys; only a SHA-256 of
+//   the secret is stored. Removing one closes that phone's connection and refuses it from then
+//   on, without touching the other phones. Phones paired before keys existed use the bare
+//   address, which the desktop can block once they have paired again.
 
 import { DurableObject } from 'cloudflare:workers'
 
-const RELAY_VERSION = '1.2.0'
+const RELAY_VERSION = '1.3.0'
 /** Bumped when the desktop ⇄ relay contract changes; the plugin refuses older relays. */
-const RELAY_PROTOCOL = 2
+const RELAY_PROTOCOL = 3
 const HOST_ID = /^[A-Za-z0-9_-]{16,64}$/
 const CONN_ID = /^[A-Za-z0-9_-]{8,64}$/
+/** A phone's key in its address: `<id>.<secret>` (the id is public to the desktop, the secret is not). */
+const PHONE_ID = /^[A-Za-z0-9_-]{8,32}$/
+const PHONE_SECRET = /^[A-Za-z0-9_-]{22,64}$/
+/** Phone keys one desktop may hold (paired phones plus codes on screen). */
+const MAX_PHONE_KEYS = 64
+/** The bare /v1/c/<hostId> address used by phones paired before per-phone keys. */
+const LEGACY = 'legacy'
 const DATA_WAIT_MS = 15_000
 /** Frames a phone may send before the desktop's data socket arrives (just the E2EE hello). */
 const MAX_PENDING_BYTES = 64 * 1024
@@ -144,6 +156,8 @@ export class RelayHost extends DurableObject {
     if (!(await this.authorized(bearer))) return json({ error: 'unauthorized' }, 401)
     if (parts[3] === 'control') return this.acceptControl(request)
     if (parts[3] === 'data' && CONN_ID.test(parts[4] ?? '')) return this.acceptData(request, parts[4])
+    if (parts[3] === 'phones') return this.managePhones(request, parts[4])
+    if (parts[3] === 'legacy' && request.method === 'PUT') return this.setLegacy(request)
     return json({ error: 'not_found' }, 404)
   }
 
@@ -215,11 +229,34 @@ export class RelayHost extends DurableObject {
     return recent.length > PHONE_RATE_PER_IP
   }
 
-  acceptPhone(request) {
+  /** Which phone key an address carries: a stored key id, LEGACY, or null when refused. */
+  async accessFor(segment) {
+    if (segment === undefined) return (await this.ctx.storage.get('legacyBlocked')) === true ? null : LEGACY
+    const dot = segment.indexOf('.')
+    const id = segment.slice(0, dot)
+    const secret = segment.slice(dot + 1)
+    if (dot < 0 || !PHONE_ID.test(id) || !PHONE_SECRET.test(secret)) return null
+    const phone = await this.ctx.storage.get(`phone:${id}`)
+    return phone && timingSafeEqual(phone.secretHash, await sha256(secret)) ? id : null
+  }
+
+  /** Records when a phone key was first and last used (shown to the desktop, never to phones). */
+  async touch(access) {
+    const now = Date.now()
+    if (access === LEGACY) return this.ctx.storage.put('legacyLastSeen', now)
+    const phone = await this.ctx.storage.get(`phone:${access}`)
+    if (phone) await this.ctx.storage.put(`phone:${access}`, { ...phone, firstSeen: phone.firstSeen ?? now, lastSeen: now })
+  }
+
+  async acceptPhone(request) {
     // No presence oracle: a plain GET reveals nothing about the desktop.
     if (!isUpgrade(request)) return this.upgradeRequired()
     const ip = request.headers.get('cf-connecting-ip') ?? 'unknown'
     if (this.rateLimited(ip)) return json({ error: 'rate_limited' }, 429)
+    const parts = new URL(request.url).pathname.split('/').filter(Boolean)
+    if (parts.length > 4) return json({ error: 'not_found' }, 404)
+    const access = await this.accessFor(parts[3])
+    if (!access) return json({ error: 'phone_not_allowed' }, 403)
     const phones = this.ctx.getWebSockets('phone')
     if (phones.length >= MAX_PHONES_PER_HOST) return json({ error: 'too_many_connections' }, 503)
     if (phones.filter((ws) => ws.deserializeAttachment()?.ip === ip).length >= MAX_PHONES_PER_IP) {
@@ -229,10 +266,11 @@ export class RelayHost extends DurableObject {
     if (!control) return json({ error: 'host_offline' }, 503)
     const id = connId()
     const { 0: client, 1: server } = new WebSocketPair()
-    this.ctx.acceptWebSocket(server, ['phone', `phone:${id}`])
-    server.serializeAttachment({ role: 'phone', id, ip })
+    this.ctx.acceptWebSocket(server, ['phone', `phone:${id}`, `access:${access}`])
+    server.serializeAttachment({ role: 'phone', id, ip, access })
     this.pending.set(id, { frames: [], bytes: 0 })
-    control.send(JSON.stringify({ t: 'open', id }))
+    await this.touch(access)
+    control.send(JSON.stringify({ t: 'open', id, phone: access === LEGACY ? null : access }))
     setTimeout(() => {
       if (this.pending.has(id) && this.ctx.getWebSockets(`data:${id}`).length === 0) {
         this.pending.delete(id)
@@ -240,6 +278,68 @@ export class RelayHost extends DurableObject {
       }
     }, DATA_WAIT_MS)
     return new Response(null, { status: 101, webSocket: client })
+  }
+
+  /** Phone sockets open right now for one key. */
+  connectedCount(access) {
+    return this.ctx.getWebSockets(`access:${access}`).length
+  }
+
+  /** Closes every open connection of one key (its desktop side closes with it). */
+  disconnect(access, reason) {
+    for (const ws of this.ctx.getWebSockets(`access:${access}`)) {
+      const attachment = ws.deserializeAttachment()
+      const peer = this.peerOf(attachment)
+      safeClose(ws, 4003, reason)
+      if (peer) safeClose(peer, 4003, reason)
+      if (attachment?.id) this.pending.delete(attachment.id)
+    }
+  }
+
+  /**
+   * Desktop only (already authorised): GET lists the phone keys, PUT <id> {secret} adds one,
+   * DELETE <id> removes one and closes its connections.
+   */
+  async managePhones(request, id) {
+    if (request.method === 'GET' && id === undefined) {
+      const stored = await this.ctx.storage.list({ prefix: 'phone:' })
+      const phones = [...stored].map(([key, phone]) => {
+        const phoneId = key.slice('phone:'.length)
+        return { id: phoneId, addedAt: phone.addedAt, firstSeen: phone.firstSeen ?? null, lastSeen: phone.lastSeen ?? null, connected: this.connectedCount(phoneId) }
+      })
+      const legacy = {
+        allowed: (await this.ctx.storage.get('legacyBlocked')) !== true,
+        lastSeen: (await this.ctx.storage.get('legacyLastSeen')) ?? null,
+        connected: this.connectedCount(LEGACY)
+      }
+      return json({ ok: true, phones, legacy })
+    }
+    if (!PHONE_ID.test(id ?? '')) return json({ error: 'invalid_phone' }, 400)
+    if (request.method === 'PUT') {
+      const body = await request.json().catch(() => null)
+      if (!PHONE_SECRET.test(body?.secret ?? '')) return json({ error: 'invalid_secret' }, 400)
+      const existing = await this.ctx.storage.get(`phone:${id}`)
+      if (existing) return json({ error: 'phone_exists' }, 409)
+      const count = (await this.ctx.storage.list({ prefix: 'phone:' })).size
+      if (count >= MAX_PHONE_KEYS) return json({ error: 'too_many_phones' }, 409)
+      await this.ctx.storage.put(`phone:${id}`, { secretHash: await sha256(body.secret), addedAt: Date.now(), firstSeen: null, lastSeen: null })
+      return json({ ok: true })
+    }
+    if (request.method === 'DELETE') {
+      const existed = await this.ctx.storage.delete(`phone:${id}`)
+      this.disconnect(id, 'removed by the desktop')
+      return json({ ok: true, removed: existed })
+    }
+    return json({ error: 'method_not_allowed' }, 405)
+  }
+
+  /** Desktop only: allow or block the bare address of phones paired before per-phone keys. */
+  async setLegacy(request) {
+    const body = await request.json().catch(() => null)
+    if (typeof body?.allowed !== 'boolean') return json({ error: 'invalid_body' }, 400)
+    await this.ctx.storage.put('legacyBlocked', !body.allowed)
+    if (!body.allowed) this.disconnect(LEGACY, 'blocked by the desktop')
+    return json({ ok: true, allowed: body.allowed })
   }
 
   acceptData(request, id) {
@@ -288,6 +388,7 @@ export class RelayHost extends DurableObject {
     if (attachment?.id) this.pending.delete(attachment.id)
     const peer = this.peerOf(attachment)
     if (peer) safeClose(peer, code, reason)
+    if (attachment?.role === 'phone' && attachment.access) await this.touch(attachment.access).catch(() => {})
   }
 
   async webSocketError(ws) {
